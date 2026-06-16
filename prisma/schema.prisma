@@ -1,0 +1,223 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  CUSTOMER
+  VENDOR
+  AGENT
+  ADMIN
+}
+
+enum KYCStatus {
+  PENDING
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+}
+
+enum BookingStatus {
+  PENDING
+  ASSIGNED
+  ACCEPTED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  DISPUTED
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  REFUNDED
+  FAILED
+}
+
+enum SubscriptionPlan {
+  FREE
+  SILVER
+  GOLD
+  PLATINUM
+}
+
+model User {
+  id                String    @id @default(auto()) @map("_id") @db.ObjectId
+  fullName          String
+  mobile            String    @unique
+  email             String?   @unique
+  role              UserRole  @default(CUSTOMER)
+  city              String
+  state             String
+  avatar            String?
+  preferredLanguage String    @default("en")
+  isVerified        Boolean   @default(false)
+  isActive          Boolean   @default(true)
+  createdAt         DateTime  @default(now())
+  passwordHash      String?
+
+  customerProfile   CustomerProfile?
+  vendorProfile     VendorProfile?
+  agentProfile      AgentProfile?
+  BookingsAsCustomer Booking[] @relation(name: "BookingsAsCustomer")
+  BookingsAsVendor  Booking[] @relation(name: "BookingsAsVendor")
+  CustomerReviews   Review[]  @relation(name: "CustomerReviews")
+  VendorReviews     Review[]  @relation(name: "VendorReviews")
+  Address           Address[]
+  walletTxs         WalletTransaction[]
+  notifications     Notification[]
+}
+
+model CustomerProfile {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId        String   @unique @db.ObjectId
+  user          User     @relation(fields: [userId], references: [id])
+  referralCode  String?
+  walletBalance Float    @default(0)
+}
+
+model VendorProfile {
+  id               String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId           String   @unique @db.ObjectId
+  user             User     @relation(fields: [userId], references: [id])
+  businessName     String
+  yearsOfExperience Int
+  serviceCategories String[]
+  serviceAreaPincodes String[]
+  workingDays      String[]
+  timeSlots        Json
+  kycStatus        KYCStatus @default(PENDING)
+  subscriptionPlan SubscriptionPlan @default(FREE)
+  reliabilityScore Float    @default(0)
+  rating           Float    @default(0)
+  totalReviews     Int      @default(0)
+  basePricing      Json
+  isApproved       Boolean   @default(false)
+}
+
+model AgentProfile {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId        String   @unique @db.ObjectId
+  user          User     @relation(fields: [userId], references: [id])
+  assignedCity  String
+  commissionPercent Float @default(5)
+  officeAddress String
+  gst           String?
+  bankDetails   Json?
+}
+
+model Address {
+  id        String  @id @default(auto()) @map("_id") @db.ObjectId
+  label     String
+  houseNo   String
+  landmark  String?
+  area      String
+  pincode   String
+  city      String
+  lat       Float?
+  lng       Float?
+  isDefault Boolean @default(false)
+  userId    String  @db.ObjectId
+  user      User    @relation(fields: [userId], references: [id])
+}
+
+model Category {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  slug        String   @unique
+  name        String
+  icon        String
+  image       String?
+  description String?
+  commissionPercent Float @default(10)
+  subCategories SubCategory[]
+  isActive    Boolean  @default(true)
+}
+
+model SubCategory {
+  id          String  @id @default(auto()) @map("_id") @db.ObjectId
+  categoryId  String  @db.ObjectId
+  category    Category @relation(fields: [categoryId], references: [id])
+  name        String
+  description String?
+  basePrice   Float
+  unit        String
+  isActive    Boolean @default(true)
+}
+
+model Booking {
+  id            String        @id @default(auto()) @map("_id") @db.ObjectId
+  customerId    String        @db.ObjectId
+  customer      User          @relation(fields: [customerId], references: [id], name: "BookingsAsCustomer")
+  vendorId      String?       @db.ObjectId
+  vendor        User?         @relation(fields: [vendorId], references: [id], name: "BookingsAsVendor")
+  categoryId    String
+  subCategoryId String
+  description   String
+  images        String[]
+  urgency       String        @default("normal")
+  address       Json
+  preferredDate String
+  timeSlot      Json
+  status        BookingStatus @default(PENDING)
+  paymentMethod String
+  paymentStatus PaymentStatus @default(PENDING)
+  baseAmount    Float
+  surgeAmount   Float         @default(0)
+  visitingCharge Float        @default(0)
+  totalAmount   Float
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  Lead          Lead[]
+  Review        Review[]
+}
+
+model Lead {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  bookingId String   @db.ObjectId
+  booking   Booking  @relation(fields: [bookingId], references: [id])
+  vendorId  String   @db.ObjectId
+  sentAt    DateTime @default(now())
+  expiresAt DateTime
+  status    String   @default("pending")
+}
+
+model Review {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  bookingId String   @db.ObjectId
+  booking   Booking  @relation(fields: [bookingId], references: [id])
+  customerId String  @db.ObjectId
+  customer  User     @relation(fields: [customerId], references: [id], name: "CustomerReviews")
+  vendorId  String   @db.ObjectId
+  vendor    User     @relation(fields: [vendorId], references: [id], name: "VendorReviews")
+  rating    Float
+  comment   String?
+  reply     String?
+  createdAt DateTime @default(now())
+}
+
+model WalletTransaction {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId      String   @db.ObjectId
+  user        User     @relation(fields: [userId], references: [id])
+  type        String
+  amount      Float
+  description String
+  balanceAfter Float
+  createdAt   DateTime @default(now())
+}
+
+model Notification {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId    String   @db.ObjectId
+  user      User     @relation(fields: [userId], references: [id])
+  type      String
+  title     String
+  message   String
+  isRead    Boolean  @default(false)
+  actionUrl String?
+  createdAt DateTime @default(now())
+}

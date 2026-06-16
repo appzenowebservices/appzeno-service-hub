@@ -1,0 +1,70 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Noto+Sans+Devanagari:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  *, *::before, *::after { box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; -webkit-tap-highlight-color: transparent; }
+
+  body {
+    @apply bg-primary-50 text-neutral-800 font-sans antialiased;
+    min-height: 100dvh;
+  }
+
+  h1 { @apply text-3xl font-bold text-neutral-900 leading-tight; }
+  h2 { @apply text-2xl font-bold text-neutral-900 leading-tight; }
+  h3 { @apply text-xl font-semibold text-neutral-900; }
+  h4 { @apply text-lg font-semibold text-neutral-800; }
+  h5 { @apply text-base font-semibold text-neutral-800; }
+  h6 { @apply text-sm font-semibold text-neutral-700; }
+  p  { @apply text-base text-neutral-600 leading-relaxed; }
+  a  { @apply text-primary-500 hover:text-primary-700 transition-colors duration-200; }
+
+  ::-webkit-scrollbar       { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { @apply bg-primary-50; }
+  ::-webkit-scrollbar-thumb { @apply bg-primary-300 rounded-full; }
+  ::-webkit-scrollbar-thumb:hover { @apply bg-primary-500; }
+}
+
+@layer components {
+  .page-container { @apply max-w-7xl mx-auto px-4 sm:px-6 lg:px-8; }
+  .section        { @apply py-12 md:py-16 lg:py-20; }
+
+  .glass-card {
+    @apply bg-white/70 backdrop-blur-md border border-white/80 rounded-2xl shadow-card;
+  }
+
+  .gradient-text {
+    @apply bg-gradient-primary bg-clip-text text-transparent;
+  }
+
+  .skeleton {
+    @apply rounded bg-neutral-200;
+    background: linear-gradient(90deg, #e2e8f0 25%, #f1f5f9 50%, #e2e8f0 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+  }
+
+  .badge {
+    @apply inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium;
+  }
+
+  .sidebar-link {
+    @apply flex items-center gap-3 px-4 py-3 rounded-xl text-neutral-600 font-medium
+           transition-all duration-200 hover:bg-primary-50 hover:text-primary-600;
+  }
+
+  .sidebar-link.active {
+    @apply bg-primary-100 text-primary-700 font-semibold;
+  }
+}
+
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+  .safe-bottom  { padding-bottom: env(safe-area-inset-bottom); }
+  .pb-nav       { padding-bottom: calc(4rem + env(safe-area-inset-bottom)); }
+}
