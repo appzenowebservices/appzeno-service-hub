@@ -1,29 +1,125 @@
-# Create T3 App
+# ADDies Marketplace
 
-This is a [T3 Stack](https://create.t3.gg/) project bootstrapped with `create-t3-app`.
+A full-stack marketplace application built with the **tRPC Stack** for connecting customers with service vendors.
 
-## What's next? How do I make an app with this?s
+## Tech Stack
 
-We try to keep this project as simple as possible, so you can start with just the scaffolding we set up for you, and add additional things later when they become necessary.
+- **[Next.js 15](https://nextjs.org)** - React framework with App Router
+- **[tRPC](https://trpc.io)** - End-to-end type-safe APIs
+- **[Prisma](https://prisma.io)** - MongoDB ORM with Prisma Client
+- **[NextAuth.js](https://next-auth.js.org)** - Authentication with Credentials provider
+- **[Tailwind CSS](https://tailwindcss.com)** - Utility-first CSS framework
+- **[Zustand](https://zustand-demo.pmndrs.com)** - State management
+- **[Zod](https://zod.dev)** - Schema validation
 
-If you are not familiar with the different technologies used in this project, please refer to the respective docs. If you still are in the wind, please join our [Discord](https://t3.gg/discord) and ask for help.
+## Features
 
-- [Next.js](https://nextjs.org)
-- [NextAuth.js](https://next-auth.js.org)
-- [Prisma](https://prisma.io)
-- [Drizzle](https://orm.drizzle.team)
-- [Tailwind CSS](https://tailwindcss.com)
-- [tRPC](https://trpc.io)
+- **User Roles**: Customer, Vendor, Agent, Admin
+- **Authentication**: Mobile/password login with JWT sessions
+- **Bookings**: Create and manage service bookings
+- **Vendor Management**: Vendor profiles and approval system
+- **MongoDB Database**: All data stored in MongoDB Atlas
 
-## Learn More
+## Getting Started
 
-To learn more about the [T3 Stack](https://create.t3.gg/), take a look at the following resources:
+### Prerequisites
 
-- [Documentation](https://create.t3.gg/)
-- [Learn the T3 Stack](https://create.t3.gg/en/faq#what-learning-resources-are-currently-available) — Check out these awesome tutorials
+- Node.js 18+
+- MongoDB Atlas account (or local MongoDB)
+- npm
 
-You can check out the [create-t3-app GitHub repository](https://github.com/t3-oss/create-t3-app) — your feedback and contributions are welcome!
+### Installation
 
-## How do I deploy this?
+1. Clone the repository:
+```bash
+git clone <repo-url>
+cd marketplace
+```
 
-Follow our deployment guides for [Vercel](https://create.t3.gg/en/deployment/vercel), [Netlify](https://create.t3.gg/en/deployment/netlify) and [Docker](https://create.t3.gg/en/deployment/docker) for more information.
+2. Install dependencies:
+```bash
+npm install
+```
+
+3. Set up environment variables:
+```bash
+cp .env.example .env
+```
+
+4. Update `.env` with your values:
+```env
+DATABASE_URL="mongodb+srv://username:password@cluster.mongodb.net/marketplace"
+NEXTAUTH_SECRET="your-secret-key"
+NEXTAUTH_URL=http://localhost:3000
+```
+
+5. Generate Prisma Client:
+```bash
+npx prisma generate
+```
+
+6. Run the development server:
+```bash
+npm run dev
+```
+
+Open [http://localhost:3001](http://localhost:3001) in your browser.
+
+## Project Structure
+
+```
+src/
+├── app/                    # Next.js App Router pages
+│   ├── api/               # API routes
+│   ├── auth/              # Authentication pages
+│   ├── customer/          # Customer dashboard
+│   └── vendor/            # Vendor dashboard
+├── server/
+│   ├── api/
+│   │   ├── routers/       # tRPC routers
+│   │   ├── trpc.ts        # tRPC context
+│   │   └── root.ts        # Router aggregation
+│   ├── auth/              # NextAuth configuration
+│   └── db.ts              # Prisma client
+├── trpc/                  # tRPC client setup
+└── styles/                # Global CSS
+```
+
+## Available Scripts
+
+- `npm run dev` - Start development server
+- `npm run build` - Build for production
+- `npm run lint` - Run ESLint
+- `npm run typecheck` - TypeScript type checking
+
+## Demo Credentials
+
+| Role | Mobile | Password |
+|------|--------|----------|
+| Customer | 9876543210 | Customer@123 |
+| Vendor | 9123456789 | Vendor@123 |
+| Agent | 9988776655 | Agent@123 |
+| Admin | 9000000001 | Admin@123# |
+
+## Database Schema
+
+Key models:
+- `User` - All user types (Customer, Vendor, Agent, Admin)
+- `Booking` - Service bookings with status tracking
+- `VendorProfile` - Vendor-specific data
+- `Category` / `SubCategory` - Service categories
+- `Review` - Customer reviews for vendors
+
+## Deployment
+
+This application can be deployed on:
+- **Vercel** (recommended)
+- **Netlify**
+- **Railway**
+- **Render**
+
+For MongoDB Atlas, ensure your cluster allows connections from your deployment URL.
+
+## License
+
+MIT
