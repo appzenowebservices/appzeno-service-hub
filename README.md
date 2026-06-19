@@ -1,7 +1,7 @@
 # ADDies Marketplace
 
 A full-stack marketplace application built with the **tRPC Stack** for connecting customers with service vendors.
-
+s
 ## Tech Stack
 
 - **[Next.js 15](https://nextjs.org)** - React framework with App Router
