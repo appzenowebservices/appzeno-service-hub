@@ -1,3 +1,5 @@
+ opencode -s ses_f70d769baffe7N4vk1OG39js46
+
 # ADDies Marketplace
 
 A full-stack marketplace application built with the **tRPC Stack** for connecting customers with service vendors.

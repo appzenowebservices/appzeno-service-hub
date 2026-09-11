@@ -1,42 +1,51 @@
 import { createTRPCRouter, publicProcedure } from "~/server/api/trpc";
 import { z } from "zod";
-import { env } from "~/env";
+import { TRPCError } from "@trpc/server";
 import { compare, genSalt, hash } from "bcryptjs";
-import { trpc } from "~/trpc/server";
 
 export const authRouter = createTRPCRouter({
   login: publicProcedure
     .input(z.object({ mobile: z.string(), password: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const user = await ctx.db.user.findFirst({
-        where: { mobile: input.mobile },
+        where: { OR: [{ mobile: input.mobile.trim() }, { email: input.mobile.trim() }] },
       });
 
-      if (!user || !user.passwordHash) {
-        throw new Error("Invalid credentials");
+      if (!user?.passwordHash) {
+        throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid credentials" });
+      }
+      if (!user.isActive) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Account blocked. Contact support." });
       }
 
       const valid = await compare(input.password, user.passwordHash);
       if (!valid) {
-        throw new Error("Invalid credentials");
+        throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid credentials" });
       }
 
-      return { id: user.id, mobile: user.mobile, role: user.role };
+      return { id: user.id, mobile: user.mobile, role: user.role, fullName: user.fullName, city: user.city };
     }),
 
   register: publicProcedure
     .input(
       z.object({
-        fullName: z.string(),
-        mobile: z.string(),
+        fullName: z.string().min(2),
+        mobile: z.string().regex(/^[6-9]\d{9}$/, "Enter valid 10-digit mobile"),
         email: z.string().email().optional(),
         password: z.string().min(6),
         role: z.enum(["CUSTOMER", "VENDOR", "AGENT"]).default("CUSTOMER"),
-        city: z.string(),
-        state: z.string(),
+        city: z.string().min(2),
+        state: z.string().min(2),
+        businessName: z.string().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
+      const existing = await ctx.db.user.findFirst({
+        where: { OR: [{ mobile: input.mobile }, ...(input.email ? [{ email: input.email }] : [])] },
+      });
+      if (existing) {
+        throw new TRPCError({ code: "CONFLICT", message: "Mobile or email already registered" });
+      }
       const salt = await genSalt(10);
       const passwordHash = await hash(input.password, salt);
 
@@ -49,8 +58,35 @@ export const authRouter = createTRPCRouter({
           role: input.role,
           city: input.city,
           state: input.state,
+          isVerified: input.role === "CUSTOMER",
         },
       });
+
+      if (input.role === "CUSTOMER") {
+        await ctx.db.customerProfile.create({
+          data: { userId: user.id, referralCode: `ADD${user.id.slice(-6).toUpperCase()}`, walletBalance: 100 },
+        });
+        await ctx.db.walletTransaction.create({
+          data: { userId: user.id, type: "credit", amount: 100, description: "Welcome bonus", balanceAfter: 100 },
+        });
+      } else if (input.role === "VENDOR") {
+        await ctx.db.vendorProfile.create({
+          data: {
+            userId: user.id,
+            businessName: input.businessName ?? `${input.fullName} Services`,
+            yearsOfExperience: 1,
+            serviceCategories: [],
+            serviceAreaPincodes: [],
+            workingDays: ["mon", "tue", "wed", "thu", "fri", "sat"],
+            timeSlots: [{ id: "m1", label: "9AM-12PM", start: "09:00", end: "12:00" }],
+            basePricing: { basePrice: 299, emergencyCharge: 150, visitingCharge: 99 },
+          },
+        });
+      } else if (input.role === "AGENT") {
+        await ctx.db.agentProfile.create({
+          data: { userId: user.id, assignedCity: input.city, officeAddress: `${input.city} office`, commissionPercent: 5 },
+        });
+      }
 
       return { id: user.id, mobile: user.mobile, role: user.role };
     }),

@@ -11,7 +11,9 @@ export const connectMongo = async () => {
   }
 
   try {
-    const connection = await mongoose.connect(env.MONGODB_URI);
+    const uri = env.MONGODB_URI ?? env.DATABASE_URL;
+    if (!uri) throw new Error("Missing DATABASE_URL/MONGODB_URI");
+    const connection = await mongoose.connect(uri);
     console.log("Connected to MongoDB");
     globalForMongo.mongoose = connection;
     return connection;

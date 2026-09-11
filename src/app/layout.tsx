@@ -1,7 +1,7 @@
 import "~/styles/globals.css";
 
 import { type Metadata } from "next";
-import { Geist } from "next/font/google";
+import { Plus_Jakarta_Sans } from "next/font/google";
 
 import { TRPCReactProvider } from "~/trpc/react";
 import { SessionProvider } from 'next-auth/react';
@@ -10,11 +10,11 @@ import { SessionProvider } from 'next-auth/react';
 
 export const metadata: Metadata = {
   title: {
-    default: "ADDies Marketplace",
-    template: "%s | Apni Desi Dukaan",
+    default: "ADDies Service Hub — Ghar ka har kaam",
+    template: "%s | ADDies Service Hub",
   },
   description:
-    "Apni Desi Dukaan – Apni ghar ki dukaan, sab kuch milega yahan. Order groceries, medicines, daily essentials, food and more from your trusted local vendors, delivered fast to your doorstep.",
+    "Plumbing, AC service, cleaning, beauty, tuition aur 50+ home services — verified vendors, upfront pricing, warranty ke saath.",
   keywords: [
     "Apni Desi Dukaan",
     "ADD",
@@ -67,20 +67,21 @@ export const metadata: Metadata = {
 
 };
 
-const geist = Geist({
+const jakarta = Plus_Jakarta_Sans({
   subsets: ["latin"],
-  variable: "--font-geist-sans",
+  variable: "--font-sans",
+  display: "swap",
 });
 
 export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className={`${geist.variable}`}>
+    <html lang="en" className={`${jakarta.variable}`}>
       <link rel="manifest" href="/manifest.json" />
         <link rel="apple-touch-icon" href="/icons/logo.webp" />
-        <meta name="theme-color" content="#174dc8" />
-      <body>
+        <meta name="theme-color" content="#0369a1" />
+      <body className="bg-surface text-ink font-sans">
         <SessionProvider >
           <TRPCReactProvider>
             {children}

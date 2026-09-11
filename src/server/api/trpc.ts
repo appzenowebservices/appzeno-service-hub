@@ -131,3 +131,32 @@ export const protectedProcedure = t.procedure
       },
     });
   });
+
+const enforceRole = (roles: string[]) =>
+  t.middleware(async ({ ctx, next }) => {
+    const user = (ctx as { session?: { user?: { role?: string } } }).session?.user;
+    if (!user) {
+      throw new TRPCError({ code: "UNAUTHORIZED" });
+    }
+    const role = (user.role as string)?.toUpperCase();
+    if (!roles.includes(role)) {
+      throw new TRPCError({ code: "FORBIDDEN", message: "Insufficient permissions" });
+    }
+    return next({
+      ctx: {
+        session: { ...(ctx as { session: object }).session, user: (ctx as { session: { user: object } }).session.user },
+      },
+    });
+  });
+
+export const adminProcedure = t.procedure
+  .use(timingMiddleware)
+  .use(enforceRole(["ADMIN"]));
+
+export const vendorProcedure = t.procedure
+  .use(timingMiddleware)
+  .use(enforceRole(["VENDOR", "ADMIN"]));
+
+export const agentProcedure = t.procedure
+  .use(timingMiddleware)
+  .use(enforceRole(["AGENT", "ADMIN"]));
