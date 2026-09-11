@@ -6,6 +6,7 @@ const __dirname = dirname(__filename);
 
 const nextConfig = {
   reactStrictMode: true,
+  output: "standalone",
   images: {
     domains: ['apnidesidukaan.com'], 
     remotePatterns: [
