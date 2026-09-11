@@ -3,7 +3,6 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 
 COPY package*.json ./
-COPY prisma ./prisma
 RUN npm ci
 
 COPY . .
@@ -16,13 +15,14 @@ WORKDIR /app
 ENV NODE_ENV=production
 
 COPY package*.json ./
-COPY prisma ./prisma
 
 RUN npm ci --omit=dev
-RUN npx prisma generate
 
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/public ./public
+# CRA production build (built in the builder stage above)
+COPY --from=builder /app/build ./build
+# Express API server + content seed data (server loads src/data/content.js)
+COPY server ./server
+COPY src ./src
 
 EXPOSE 3000
-CMD ["npm", "start"]
+CMD ["node", "server/index.js"]

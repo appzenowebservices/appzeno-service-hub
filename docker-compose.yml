@@ -1,12 +1,14 @@
 services:
   web_add:
     build: .
-    container_name: add-web
+    container_name: add-service
     restart: unless-stopped
     env_file:
       - .env
     environment:
       NODE_ENV: production
+      HOSTNAME: "0.0.0.0"
+      PORT: 3000
     networks:
       - web
 
