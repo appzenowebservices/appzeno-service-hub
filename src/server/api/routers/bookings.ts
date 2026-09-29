@@ -89,27 +89,40 @@ export const bookingsRouter = createTRPCRouter({
     .input(
       z.object({
         status: statusEnum.optional(),
-        city: z.string().optional(),
+        paymentStatus: z.enum(["PENDING", "PAID", "REFUNDED", "FAILED"]).optional(),
+        vendorId: z.string().optional(),
         limit: z.number().min(1).max(100).default(20),
         skip: z.number().default(0),
       })
     )
     .query(async ({ ctx, input }) => {
+      const where = {
+        ...(input.status ? { status: input.status } : {}),
+        ...(input.paymentStatus ? { paymentStatus: input.paymentStatus } : {}),
+        ...(input.vendorId ? { vendorId: input.vendorId } : {}),
+      };
       const bookings = await ctx.db.booking.findMany({
-        where: { ...(input.status ? { status: input.status } : {}) },
+        where,
         take: input.limit,
         skip: input.skip,
         orderBy: { createdAt: "desc" },
         include: { customer: true, vendor: true },
       });
-      const total = await ctx.db.booking.count({ where: { ...(input.status ? { status: input.status } : {}) } });
+      const total = await ctx.db.booking.count({ where });
       return { bookings, total };
     }),
 
   updateStatus: protectedProcedure
     .input(z.object({ id: z.string(), status: statusEnum }))
     .mutation(async ({ ctx, input }) => {
-      return ctx.db.booking.update({ where: { id: input.id }, data: { status: input.status } });
+      const prev = await ctx.db.booking.findUnique({ where: { id: input.id }, select: { status: true, categoryId: true } });
+      const updated = await ctx.db.booking.update({ where: { id: input.id }, data: { status: input.status } });
+      // first transition to COMPLETED → credit the category's public booking counter
+      if (input.status === "COMPLETED" && prev && prev.status !== "COMPLETED" && prev.categoryId) {
+        const cat = await ctx.db.category.findFirst({ where: { OR: [{ id: prev.categoryId }, { slug: prev.categoryId }] } });
+        if (cat) await ctx.db.category.update({ where: { id: cat.id }, data: { totalBookings: { increment: 1 } } });
+      }
+      return updated;
     }),
 
   assignVendor: protectedProcedure

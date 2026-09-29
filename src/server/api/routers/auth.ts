@@ -37,6 +37,9 @@ export const authRouter = createTRPCRouter({
         city: z.string().min(2),
         state: z.string().min(2),
         businessName: z.string().optional(),
+        serviceCategories: z.array(z.string()).max(20).optional(),
+        yearsOfExperience: z.number().int().min(0).max(60).optional(),
+        officeAddress: z.string().max(200).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -74,8 +77,8 @@ export const authRouter = createTRPCRouter({
           data: {
             userId: user.id,
             businessName: input.businessName ?? `${input.fullName} Services`,
-            yearsOfExperience: 1,
-            serviceCategories: [],
+            yearsOfExperience: input.yearsOfExperience ?? 1,
+            serviceCategories: input.serviceCategories ?? [],
             serviceAreaPincodes: [],
             workingDays: ["mon", "tue", "wed", "thu", "fri", "sat"],
             timeSlots: [{ id: "m1", label: "9AM-12PM", start: "09:00", end: "12:00" }],
@@ -84,7 +87,7 @@ export const authRouter = createTRPCRouter({
         });
       } else if (input.role === "AGENT") {
         await ctx.db.agentProfile.create({
-          data: { userId: user.id, assignedCity: input.city, officeAddress: `${input.city} office`, commissionPercent: 5 },
+          data: { userId: user.id, assignedCity: input.city, officeAddress: input.officeAddress ?? `${input.city} office`, commissionPercent: 5 },
         });
       }
 

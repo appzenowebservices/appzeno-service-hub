@@ -2,6 +2,12 @@ import CredentialsProvider from "next-auth/providers/credentials";
 import { compare } from "bcryptjs";
 import { db } from "~/server/db";
 
+if (process.env.SUPERADMIN_MOBILE && process.env.SUPERADMIN_PASSWORD_HASH_B64) {
+  console.log("[auth] env superadmin login enabled");
+} else {
+  console.warn("[auth] SUPERADMIN_MOBILE / SUPERADMIN_PASSWORD_HASH_B64 not set — env superadmin login disabled");
+}
+
 export const authConfig = {
   secret: process.env.AUTH_SECRET ?? process.env.NEXTAUTH_SECRET,
   trustHost: true,
@@ -19,6 +25,30 @@ export const authConfig = {
         const identifier = ((credentials?.mobile as string) ?? "").trim();
         const password = credentials?.password as string | undefined;
         if (!identifier || !password) return null;
+
+        // ── Env superadmin: DB-independent bootstrap login (checked first) ──
+        // Mobile + base64(bcrypt hash) live only in `.env` (gitignored), never in code/DB.
+        // Base64 because a raw bcrypt hash contains `$`, which Next.js .env
+        // expansion would silently swallow.
+        const envMobile = (process.env.SUPERADMIN_MOBILE ?? "").trim();
+        let envHash = "";
+        try {
+          envHash = Buffer.from(process.env.SUPERADMIN_PASSWORD_HASH_B64 ?? "", "base64").toString("utf8");
+        } catch {
+          envHash = "";
+        }
+        if (envMobile !== "" && /^\$2[aby]\$/.test(envHash) && identifier === envMobile) {
+          const valid = await compare(password, envHash);
+          if (!valid) return null;
+          return {
+            id: "env-superadmin",
+            name: "Super Administrator",
+            email: undefined,
+            mobile: envMobile,
+            role: "ADMIN",
+            city: "Lucknow",
+          } as unknown as { id: string; name: string };
+        }
 
         const user = await db.user.findFirst({
           where: {

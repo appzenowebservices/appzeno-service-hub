@@ -8,7 +8,7 @@ export const categoriesRouter = createTRPCRouter({
       return ctx.db.category.findMany({
         where: input?.includeInactive ? {} : { isActive: true },
         include: { subCategories: { where: { isActive: true } } },
-        orderBy: { name: "asc" },
+        orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
       });
     }),
 

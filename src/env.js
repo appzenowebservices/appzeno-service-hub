@@ -10,6 +10,8 @@ export const env = createEnv({
   
     server: {
     AUTH_SECRET: isProd ? z.string() : z.string().optional(),
+    SUPERADMIN_MOBILE: z.string().optional(),
+    SUPERADMIN_PASSWORD_HASH_B64: z.string().optional(),
     // AUTH_DISCORD_ID: isProd ? z.string() : z.string().optional(),
     // AUTH_DISCORD_SECRET: isProd ? z.string() : z.string().optional(),
     DATABASE_URL: isProd ? z.string().url() : z.string().url().optional(),
@@ -31,6 +33,8 @@ export const env = createEnv({
    */
   runtimeEnv: {
     AUTH_SECRET: process.env.AUTH_SECRET,
+    SUPERADMIN_MOBILE: process.env.SUPERADMIN_MOBILE,
+    SUPERADMIN_PASSWORD_HASH_B64: process.env.SUPERADMIN_PASSWORD_HASH_B64,
     // AUTH_DISCORD_ID: process.env.AUTH_DISCORD_ID,
     // AUTH_DISCORD_SECRET: process.env.AUTH_DISCORD_SECRET,
     DATABASE_URL: process.env.DATABASE_URL,

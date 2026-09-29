@@ -5,6 +5,9 @@ import { Plus_Jakarta_Sans } from "next/font/google";
 
 import { TRPCReactProvider } from "~/trpc/react";
 import { SessionProvider } from 'next-auth/react';
+import { NextSSRPlugin } from "@uploadthing/react/next-ssr-plugin";
+import { extractRouterConfig } from "uploadthing/server";
+import { ourFileRouter } from "./uploadthing";
 // import FcmBootstrap from "~/app/components/FcmBootstrap";
 
 
@@ -82,6 +85,7 @@ export default function RootLayout({
         <link rel="apple-touch-icon" href="/icons/logo.webp" />
         <meta name="theme-color" content="#0369a1" />
       <body className="bg-surface text-ink font-sans">
+        <NextSSRPlugin routerConfig={extractRouterConfig(ourFileRouter)} />
         <SessionProvider >
           <TRPCReactProvider>
             {children}

@@ -1,9 +1,10 @@
+import Image from "next/image";
 import Link from "next/link";
 import { api } from "~/trpc/server";
 
 export default async function ServicesPage({ searchParams }: { searchParams?: Promise<{ cat?: string }> }) {
   const sp = searchParams ? await searchParams : undefined;
-  let cats: { id: string; slug: string; name: string; icon: string; description?: string | null; commissionPercent: number; subCategories: { id: string; name: string; basePrice: number; unit: string }[] }[] = [];
+  let cats: { id: string; slug: string; name: string; icon: string; description?: string | null; rating: number; totalBookings: number; commissionPercent: number; subCategories: { id: string; name: string; basePrice: number; unit: string }[] }[] = [];
   try {
     cats = await api.categories.getAll();
   } catch {
@@ -24,14 +25,23 @@ export default async function ServicesPage({ searchParams }: { searchParams?: Pr
         <p className="eyebrow">Fixed pricing • No hidden charges</p>
         <h1 className="h-section mt-2 !text-2xl">All services ({cats.length})</h1>
         <p className="sub mb-5 mt-1">Genuine upfront pricing • Verified vendors • Warranty included</p>
+        {list.length === 0 ? (
+          <div className="card flex flex-col items-center gap-1.5 py-12 text-center">
+            <p className="font-extrabold text-ink">Service menu coming soon</p>
+            <p className="max-w-sm text-sm text-muted">Our team is finalizing services and fixed pricing for your city. Please check back shortly.</p>
+            <Link href="/" className="btn-ghost mt-2 !py-2 text-[13px]">Back to home</Link>
+          </div>
+        ) : null}
         <div className="grid gap-3 md:grid-cols-2">
           {list.map((c) => (
             <div key={c.id} className="card card-hover">
               <div className="flex items-center gap-3">
-                <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary-50 text-2xl">{c.icon}</span>
+                <span className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-2xl bg-primary-50 text-2xl">
+                  {c.icon.startsWith("/") ? <Image src={c.icon} alt={c.name} width={44} height={44} className="h-full w-full object-cover" /> : (c.icon === "" ? "✨" : c.icon)}
+                </span>
                 <div>
                   <p className="font-extrabold text-ink">{c.name}</p>
-                  <p className="text-xs font-semibold text-accent-600">★ 4.6 avg • {c.subCategories.length} options</p>
+                  <p className="text-xs font-semibold text-accent-600">★ {c.rating > 0 ? c.rating.toFixed(2) : "New"} • {c.subCategories.length} options</p>
                 </div>
               </div>
               <p className="sub mt-2 !text-[13px]">{c.description}</p>

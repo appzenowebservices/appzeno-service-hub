@@ -44,3 +44,6 @@ yarn-error.log*
 
 # idea files
 .idea
+
+# opencode session files (contain session tokens)
+oc.md

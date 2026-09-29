@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 
 export function SiteHeader({ active }: { active?: string }) {
@@ -11,7 +12,7 @@ export function SiteHeader({ active }: { active?: string }) {
     <header className="sticky top-0 z-40 border-b border-line bg-white/90 backdrop-blur">
       <div className="page-container flex h-16 items-center justify-between">
         <Link href="/" className="flex items-center gap-2.5">
-          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary-600 text-lg font-extrabold text-white">A</span>
+          <Image src="/logo.png" alt="ADDies Service Hub" width={36} height={36} className="h-9 w-9 object-contain" />
           <span className="leading-none">
             <span className="block text-[17px] font-extrabold tracking-tight text-ink">ADDies</span>
             <span className="block text-[10px] font-bold uppercase tracking-[0.18em] text-primary-600">Service Hub</span>

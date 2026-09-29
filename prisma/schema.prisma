@@ -133,6 +133,11 @@ model Category {
   image       String?
   description String?
   commissionPercent Float @default(10)
+  // ── storefront merchandising (all superadmin-controlled) ──
+  rating        Float   @default(0)
+  totalBookings Int     @default(0)
+  isFeatured    Boolean @default(false)
+  sortOrder     Int     @default(0)
   subCategories SubCategory[]
   isActive    Boolean  @default(true)
 }
