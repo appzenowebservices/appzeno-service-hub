@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { db } from "~/server/db";
+import { parseVendorListUuids } from "./core";
 import type { OmnipostConfirmation, OmnipostStore } from "./core";
 
 const OBJECT_ID = /^[0-9a-fA-F]{24}$/;
@@ -56,6 +57,33 @@ async function agentProfileIdsFor(
 }
 
 /**
+ * User IDs to verify for a vendor/customer confirm, restricted to the given
+ * roles. Same rules: exact Mongo ID wins, case-insensitive email fallback
+ * within those roles only, unknown ID matches nothing. Approval/KYC fields
+ * are NEVER touched here.
+ */
+async function verifyUserIdsFor(
+  tx: Prisma.TransactionClient,
+  partnerId: string | null,
+  email: string,
+  roles: ("VENDOR" | "CUSTOMER")[],
+): Promise<string[]> {
+  if (partnerId) {
+    if (!OBJECT_ID.test(partnerId)) return [];
+    const byId = await tx.user.findFirst({
+      where: { id: partnerId, role: { in: roles } },
+      select: { id: true },
+    });
+    return byId ? [byId.id] : [];
+  }
+  const users = await tx.user.findMany({
+    where: { role: { in: roles }, email: { equals: email, mode: "insensitive" } },
+    select: { id: true },
+  });
+  return users.map((u) => u.id);
+}
+
+/**
  * Vendor user IDs to verify for a registration confirm.
  *
  * Same rules as the agent matcher: exact Mongo ID wins (tell the Omnipost
@@ -71,19 +99,7 @@ async function vendorUserIdsFor(
   partnerId: string | null,
   email: string,
 ): Promise<string[]> {
-  if (partnerId) {
-    if (!OBJECT_ID.test(partnerId)) return [];
-    const byId = await tx.user.findFirst({
-      where: { id: partnerId, role: "VENDOR" },
-      select: { id: true },
-    });
-    return byId ? [byId.id] : [];
-  }
-  const users = await tx.user.findMany({
-    where: { role: "VENDOR", email: { equals: email, mode: "insensitive" } },
-    select: { id: true },
-  });
-  return users.map((u) => u.id);
+  return verifyUserIdsFor(tx, partnerId, email, ["VENDOR"]);
 }
 export const prismaOmnipostStore: OmnipostStore = {
   async processConfirmation(input: OmnipostConfirmation) {
@@ -122,7 +138,8 @@ export const prismaOmnipostStore: OmnipostStore = {
         });
 
         // Agent registration (carried by core's vendor branch — see note
-        // above): flip AgentProfile.isVerified on EVERY matching profile.
+        // above): flip AgentProfile.isVerified on EVERY matching profile,
+        // plus User.isVerified on the linked users (login is email-gated).
         let vendorVerified = false;
         let vendorMatched = 0;
         if (input.vendor.verify) {
@@ -138,29 +155,69 @@ export const prismaOmnipostStore: OmnipostStore = {
             });
             vendorMatched = updated.count;
             vendorVerified = updated.count > 0;
+            const owners = await tx.agentProfile.findMany({
+              where: { id: { in: profileIds } },
+              select: { userId: true },
+            });
+            await tx.user.updateMany({
+              where: { id: { in: owners.map((o) => o.userId) } },
+              data: { isVerified: true },
+            });
           }
         }
 
-        // Vendor registration (carried by core's delivery-partner branch —
-        // see mapping note in the route adapter): flip User.isVerified on
-        // EVERY matching role=VENDOR user. Approval/KYC (isApproved,
-        // kycStatus) is NEVER touched by email confirmation.
+        // Vendor / customer registration (carried by core's
+        // delivery-partner branch — see mapping note in the route adapter).
+        // Which flag flips depends on which list confirmed (a confirm can
+        // carry several lists — each matching list applies independently):
+        // - vendors list   → User.isVerified on role=VENDOR rows
+        // - customers list → User.isVerified on role=CUSTOMER rows +
+        //   CustomerProfile.isApproved (their email-verified mirror)
+        // Approval/KYC (isApproved on vendors, kycStatus) is NEVER touched.
         let deliveryPartnerVerified = false;
         let deliveryPartnerMatched = 0;
         if (input.deliveryPartner.verify) {
-          const userIds = await vendorUserIdsFor(
-            tx,
-            input.deliveryPartner.partnerId,
-            input.deliveryPartner.email,
-          );
-          if (userIds.length > 0) {
-            const updated = await tx.user.updateMany({
-              where: { id: { in: userIds } },
-              data: { isVerified: true },
-            });
-            deliveryPartnerMatched = updated.count;
-            deliveryPartnerVerified = updated.count > 0;
+          const vendorLists = parseVendorListUuids(process.env.OMNIPOST_VENDOR_LIST_UUIDS);
+          const customerLists = parseVendorListUuids(process.env.OMNIPOST_CUSTOMER_LIST_UUIDS);
+          const firesVendor = input.listUuids.some((uuid) => vendorLists.includes(uuid));
+          const firesCustomer = input.listUuids.some((uuid) => customerLists.includes(uuid));
+
+          if (firesVendor) {
+            const userIds = await vendorUserIdsFor(
+              tx,
+              input.deliveryPartner.partnerId,
+              input.deliveryPartner.email,
+            );
+            if (userIds.length > 0) {
+              const updated = await tx.user.updateMany({
+                where: { id: { in: userIds } },
+                data: { isVerified: true },
+              });
+              deliveryPartnerMatched += updated.count;
+            }
           }
+
+          if (firesCustomer) {
+            const userIds = await verifyUserIdsFor(
+              tx,
+              input.deliveryPartner.partnerId,
+              input.deliveryPartner.email,
+              ["CUSTOMER"],
+            );
+            if (userIds.length > 0) {
+              const updated = await tx.user.updateMany({
+                where: { id: { in: userIds } },
+                data: { isVerified: true },
+              });
+              deliveryPartnerMatched += updated.count;
+              await tx.customerProfile.updateMany({
+                where: { userId: { in: userIds } },
+                data: { isApproved: true },
+              });
+            }
+          }
+
+          deliveryPartnerVerified = deliveryPartnerMatched > 0;
         }
 
         return {

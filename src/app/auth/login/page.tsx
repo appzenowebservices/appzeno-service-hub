@@ -39,6 +39,21 @@ export default function LoginPage() {
     }
     setLoading(true);
 
+    // Pre-check credentials via tRPC first so we can tell "unverified email"
+    // apart from "wrong password" (NextAuth only returns a generic error).
+    try {
+      const check = await utils.auth.login.fetch({ mobile: mobile.trim(), password });
+      if (!check.isVerified) {
+        setLoading(false);
+        setError("Please verify your email first — check your inbox for the confirmation link, then sign in.");
+        return;
+      }
+    } catch {
+      setLoading(false);
+      setError("Invalid mobile or password. Try demo credentials below.");
+      return;
+    }
+
     const result = await signIn("credentials", {
       redirect: false,
       mobile: mobile.trim(),

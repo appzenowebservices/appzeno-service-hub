@@ -50,14 +50,19 @@ export const authConfig = {
           } as unknown as { id: string; name: string };
         }
 
-        const user = await db.user.findFirst({
-          where: {
-            OR: [{ mobile: identifier }, { email: identifier }],
-          },
-        });
+        // Mobile first (globally unique login key), then email — email may
+        // exist on several role accounts, so an email match picks any one of
+        // them; mobile login is always unambiguous.
+        const user =
+          (await db.user.findFirst({ where: { mobile: identifier } })) ??
+          (await db.user.findFirst({ where: { email: identifier } }));
 
         if (!user?.passwordHash) return null;
         if (!user.isActive) return null;
+        // Email-gated login: accounts stay locked until the owner confirms
+        // their email (Omnipost event flips isVerified). Env superadmin above
+        // bypasses this — it has no DB row.
+        if (!user.isVerified) return null;
 
         const valid = await compare(password, user.passwordHash as string);
         if (!valid) return null;

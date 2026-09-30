@@ -96,15 +96,19 @@ subscriber metadata / subscriber / top level — tell the Omnipost agent to
 send `subscriber.metadata.partnerId` = the vendor's **User id**, else the
 subscriber **email** as fallback (case-insensitive, role=VENDOR users only,
 all matches flip). This flips **only** `User.isVerified` — approval/KYC
-(`isApproved`, `kycStatus`) is never touched by email confirmation.
-Response/log fields say `deliveryPartnerVerified` / `deliveryPartnerMatched`
-for vendor confirms (documented mapping, same wire shape).
+(`isApproved`, `kycStatus`) is never touched by email confirmation, and a
+customers-list confirm can never flip a vendor row (list membership is
+checked per list). Response/log fields say `deliveryPartnerVerified` /
+`deliveryPartnerMatched` for vendor confirms (documented mapping, same wire
+shape).
 
-## Customer confirmations → upsert only
+## Customer confirmations → User.isVerified + CustomerProfile.isApproved
 
-`service.apnidesidukaan-customers` has no verify branch (customers are
-`isVerified` at signup): confirms are signature-verified and upserted, no
-flag flips, still 200.
+Same branch, `service.apnidesidukaan-customers` list: flips `User.isVerified`
+on role=CUSTOMER rows plus their `CustomerProfile.isApproved` mirror.
+Customers register unverified and login stays locked until this confirm —
+the flip is what unlocks them. Vendors-list confirms can never touch
+customer rows and vice versa.
 
 ## DB (this project's own tables)
 

@@ -23,7 +23,7 @@ export const authRouter = createTRPCRouter({
         throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid credentials" });
       }
 
-      return { id: user.id, mobile: user.mobile, role: user.role, fullName: user.fullName, city: user.city };
+      return { id: user.id, mobile: user.mobile, role: user.role, fullName: user.fullName, city: user.city, isVerified: user.isVerified };
     }),
 
   register: publicProcedure
@@ -43,11 +43,24 @@ export const authRouter = createTRPCRouter({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // Mobile is the global login key (unique across all roles). Email may
+      // repeat across roles, but not twice within the SAME role.
       const existing = await ctx.db.user.findFirst({
-        where: { OR: [{ mobile: input.mobile }, ...(input.email ? [{ email: input.email }] : [])] },
+        where: {
+          OR: [
+            { mobile: input.mobile },
+            ...(input.email ? [{ email: input.email, role: input.role }] : []),
+          ],
+        },
       });
       if (existing) {
-        throw new TRPCError({ code: "CONFLICT", message: "Mobile or email already registered" });
+        throw new TRPCError({
+          code: "CONFLICT",
+          message:
+            existing.mobile === input.mobile
+              ? "This mobile number is already registered"
+              : "This email is already registered for the selected role",
+        });
       }
       const salt = await genSalt(10);
       const passwordHash = await hash(input.password, salt);
@@ -61,7 +74,9 @@ export const authRouter = createTRPCRouter({
           role: input.role,
           city: input.city,
           state: input.state,
-          isVerified: input.role === "CUSTOMER",
+          // always false at signup — flipped only by email confirmation
+          // (Omnipost subscriber.confirmed webhook); login is blocked until then.
+          isVerified: false,
         },
       });
 

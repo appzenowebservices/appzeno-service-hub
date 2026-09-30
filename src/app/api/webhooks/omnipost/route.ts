@@ -16,12 +16,15 @@ export const runtime = "nodejs";
  *
  * MAPPING NOTE: core knows `vendor` / `deliveryPartner` branches. This repo
  * maps them as:
- * - vendor branch        ← agents list      → flips AgentProfile.isVerified
- * - deliveryPartner branch ← vendors list   → flips User.isVerified (role=VENDOR only)
- * - customers list       ← verify trigger: none (customers are isVerified at
- *   signup); confirms are verified + upserted, no flag flips.
+ * - vendor branch          ← agents list      → flips AgentProfile.isVerified
+ *   (+ the agent User.isVerified)
+ * - deliveryPartner branch ← vendors + customers lists → flips User.isVerified
+ *   on role=VENDOR rows (vendors list) and role=CUSTOMER rows + their
+ *   CustomerProfile.isApproved (customers list). The store tells the two
+ *   apart by list membership, so a customer confirm can never verify a
+ *   vendor row and vice versa. KYC approval is never touched.
  * Response/log fields therefore say `vendorVerified` for agent confirms and
- * `deliveryPartnerVerified` for vendor confirms (same wire shape as
+ * `deliveryPartnerVerified` for vendor/customer confirms (same wire shape as
  * super-admin, different tables behind it).
  */
 export async function POST(req: Request) {
@@ -37,7 +40,11 @@ export async function POST(req: Request) {
     secrets: parseOmnipostSecrets(process.env.OMNIPOST_LIST_SECRETS),
     store: prismaOmnipostStore,
     vendorListUuids: parseVendorListUuids(process.env.OMNIPOST_AGENT_LIST_UUIDS),
-    deliveryPartnerListUuids: parseVendorListUuids(process.env.OMNIPOST_VENDOR_LIST_UUIDS),
+    deliveryPartnerListUuids: parseVendorListUuids(
+      [process.env.OMNIPOST_VENDOR_LIST_UUIDS, process.env.OMNIPOST_CUSTOMER_LIST_UUIDS]
+        .filter((v): v is string => typeof v === "string" && v.trim() !== "")
+        .join(","),
+    ),
     debugVerify: process.env.OMNIPOST_DEBUG === "1",
     onTrace: (step, detail) => console.info(`[omnipost] ${step}`, detail ?? {}),
   });
