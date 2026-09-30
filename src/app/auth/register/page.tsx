@@ -62,15 +62,17 @@ const ROLE_COPY: Record<Role, { badge: string; title: string; accent: string; su
 
 const POINT_ICONS = [BadgeCheck, Wallet, ShieldCheck];
 
-// OmniPost agent mailing list — new agents are subscribed here on signup (see below).
+// OmniPost mailing lists — new signups are subscribed here on registration (see below).
 const AGENT_LIST_ID = "bdeb0103-2a84-4f0d-91ac-2ad99cc3c8c8";
+const VENDOR_LIST_ID = "33158e14-a7e2-4de8-a485-88271adac9f8";
+const CUSTOMER_LIST_ID = "353d86bf-26a5-4a92-a8a4-37186e656ad1";
 const AGENT_SUBSCRIBE_URL = "https://omnipost.appzenowebservices.com/subscription/form";
 
-async function subscribeAgentList(email: string, name: string): Promise<void> {
+async function subscribeMailingList(email: string, name: string, listId: string): Promise<void> {
   const fd = new FormData();
   fd.append("email", email);
   fd.append("name", name);
-  fd.append("l", AGENT_LIST_ID);
+  fd.append("l", listId);
   fd.append("nonce", "");
   // fire-and-forget: subscription must never block registration
   await fetch(AGENT_SUBSCRIBE_URL, { method: "POST", body: fd, mode: "no-cors" });
@@ -97,6 +99,8 @@ function RegisterForm() {
   const [cats, setCats] = useState<string[]>([]);
   const [officeAddress, setOfficeAddress] = useState("");
   const [agentNews, setAgentNews] = useState(true);
+  const [vendorNews, setVendorNews] = useState(true);
+  const [customerNews, setCustomerNews] = useState(true);
   const [terms, setTerms] = useState(false);
   const [err, setErr] = useState("");
   const [done, setDone] = useState<Role | null>(null);
@@ -172,7 +176,13 @@ function RegisterForm() {
       }
       if (role === "AGENT" && em !== "" && agentNews) {
         // subscribe to agent mailing list — never blocks the signup flow
-        subscribeAgentList(em, fullName.trim()).catch(() => undefined);
+        subscribeMailingList(em, fullName.trim(), AGENT_LIST_ID).catch(() => undefined);
+      }
+      if (role === "VENDOR" && em !== "" && vendorNews) {
+        subscribeMailingList(em, fullName.trim(), VENDOR_LIST_ID).catch(() => undefined);
+      }
+      if (role === "CUSTOMER" && em !== "" && customerNews) {
+        subscribeMailingList(em, fullName.trim(), CUSTOMER_LIST_ID).catch(() => undefined);
       }
       if (role === "CUSTOMER") {
         router.push("/customer/dashboard");
@@ -385,6 +395,10 @@ function RegisterForm() {
                 ) : (
                 <p className="rounded-xl bg-surface px-3.5 py-2.5 text-[13px] font-medium text-muted">Service catalog is being set up — register now, and our team will assign your services during KYC verification.</p>
                 )}
+                <label className="mt-2.5 flex cursor-pointer items-start gap-2.5 rounded-xl bg-surface px-3.5 py-2.5 text-[13px] font-medium text-body">
+                  <input type="checkbox" checked={vendorNews} onChange={(e) => setVendorNews(e.target.checked)} className="mt-0.5 h-4 w-4 shrink-0 rounded accent-primary-600" />
+                  <span>Email me lead alerts, vendor offers & policy updates <span className="text-muted">(service.apnidesidukaan-vendors)</span></span>
+                </label>
               </div>
             )}
 
@@ -403,9 +417,15 @@ function RegisterForm() {
             )}
 
             {role === "CUSTOMER" && (
+              <>
               <p className="flex items-start gap-1.5 rounded-xl bg-success-soft px-3.5 py-2.5 text-[13px] font-semibold text-success">
                 <Wallet size={15} className="mt-0.5 shrink-0" /> ₹100 welcome bonus lands in your wallet the moment you join.
               </p>
+              <label className="flex cursor-pointer items-start gap-2.5 rounded-xl bg-surface px-3.5 py-2.5 text-[13px] font-medium text-body">
+                <input type="checkbox" checked={customerNews} onChange={(e) => setCustomerNews(e.target.checked)} className="mt-0.5 h-4 w-4 shrink-0 rounded accent-primary-600" />
+                <span>Email me new services, offers & booking updates <span className="text-muted">(service.apnidesidukaan-customers)</span></span>
+              </label>
+              </>
             )}
 
             <label className="flex cursor-pointer items-start gap-2.5 text-[13px] font-medium text-body">

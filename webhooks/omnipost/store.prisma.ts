@@ -56,14 +56,35 @@ async function agentProfileIdsFor(
 }
 
 /**
- * Production persistence for the Omnipost receiver (this project).
+ * Vendor user IDs to verify for a registration confirm.
  *
- * Atomicity: processed-key insert + subscriber upsert + optional agent
- * verify run in one transaction, so a retried delivery can never create a
- * half-applied state. Duplicate deliveries (same `idempotency_key`) hit the
- * unique key and return `{ duplicate: true }` — including under races
- * (P2002 fallback).
+ * Same rules as the agent matcher: exact Mongo ID wins (tell the Omnipost
+ * agent to send `subscriber.metadata.partnerId` = the vendor's **User** id),
+ * case-insensitive email fallback restricted to role=VENDOR users, and a
+ * supplied-but-unknown ID matches NOTHING (never falls back to email).
+ *
+ * This flips ONLY `User.isVerified` — approval/KYC (`isApproved`,
+ * `kycStatus`) is never touched by email confirmation.
  */
+async function vendorUserIdsFor(
+  tx: Prisma.TransactionClient,
+  partnerId: string | null,
+  email: string,
+): Promise<string[]> {
+  if (partnerId) {
+    if (!OBJECT_ID.test(partnerId)) return [];
+    const byId = await tx.user.findFirst({
+      where: { id: partnerId, role: "VENDOR" },
+      select: { id: true },
+    });
+    return byId ? [byId.id] : [];
+  }
+  const users = await tx.user.findMany({
+    where: { role: "VENDOR", email: { equals: email, mode: "insensitive" } },
+    select: { id: true },
+  });
+  return users.map((u) => u.id);
+}
 export const prismaOmnipostStore: OmnipostStore = {
   async processConfirmation(input: OmnipostConfirmation) {
     try {
@@ -120,11 +141,27 @@ export const prismaOmnipostStore: OmnipostStore = {
           }
         }
 
-        // No delivery-partner model in this project. The branch is accepted
-        // and reported (never throws) so a multi-purpose payload still
-        // returns 200 with a visible miss.
-        const deliveryPartnerVerified = false;
-        const deliveryPartnerMatched = 0;
+        // Vendor registration (carried by core's delivery-partner branch —
+        // see mapping note in the route adapter): flip User.isVerified on
+        // EVERY matching role=VENDOR user. Approval/KYC (isApproved,
+        // kycStatus) is NEVER touched by email confirmation.
+        let deliveryPartnerVerified = false;
+        let deliveryPartnerMatched = 0;
+        if (input.deliveryPartner.verify) {
+          const userIds = await vendorUserIdsFor(
+            tx,
+            input.deliveryPartner.partnerId,
+            input.deliveryPartner.email,
+          );
+          if (userIds.length > 0) {
+            const updated = await tx.user.updateMany({
+              where: { id: { in: userIds } },
+              data: { isVerified: true },
+            });
+            deliveryPartnerMatched = updated.count;
+            deliveryPartnerVerified = updated.count > 0;
+          }
+        }
 
         return {
           duplicate: false,

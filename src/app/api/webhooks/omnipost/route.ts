@@ -15,11 +15,14 @@ export const runtime = "nodejs";
  * `/webhooks/omnipost/core.ts` (verbatim, provider-identical).
  *
  * MAPPING NOTE: core knows `vendor` / `deliveryPartner` branches. This repo
- * has one confirming role — the city agent — so the agents list UUID is fed
- * as `vendorListUuids`: the vendor branch carries the agent-registration
- * signal and the store flips AgentProfile.isVerified. Response/log fields
- * therefore say `vendorVerified` for agent confirms (same wire shape as
- * super-admin, different table behind it).
+ * maps them as:
+ * - vendor branch        ← agents list      → flips AgentProfile.isVerified
+ * - deliveryPartner branch ← vendors list   → flips User.isVerified (role=VENDOR only)
+ * - customers list       ← verify trigger: none (customers are isVerified at
+ *   signup); confirms are verified + upserted, no flag flips.
+ * Response/log fields therefore say `vendorVerified` for agent confirms and
+ * `deliveryPartnerVerified` for vendor confirms (same wire shape as
+ * super-admin, different tables behind it).
  */
 export async function POST(req: Request) {
   // RAW body — the signature is computed over these exact bytes.
@@ -34,6 +37,7 @@ export async function POST(req: Request) {
     secrets: parseOmnipostSecrets(process.env.OMNIPOST_LIST_SECRETS),
     store: prismaOmnipostStore,
     vendorListUuids: parseVendorListUuids(process.env.OMNIPOST_AGENT_LIST_UUIDS),
+    deliveryPartnerListUuids: parseVendorListUuids(process.env.OMNIPOST_VENDOR_LIST_UUIDS),
     debugVerify: process.env.OMNIPOST_DEBUG === "1",
     onTrace: (step, detail) => console.info(`[omnipost] ${step}`, detail ?? {}),
   });

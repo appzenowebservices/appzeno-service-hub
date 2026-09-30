@@ -87,9 +87,24 @@ role=AGENT also accepted), else the subscriber **email** as fallback
 `updateMany`). A supplied-but-unknown ID verifies nothing (never falls back
 to email — wrong-person risk).
 
-There is no delivery-partner model here: a DP-branch verify is accepted and
-reported (`deliveryPartnerVerified: false` + warn, still 200) but flips
-nothing. The subscriber upsert always runs regardless.
+## Vendor registration → User.isVerified (role=VENDOR)
+
+Same treatment through core's **delivery-partner branch**: trigger is any
+list UUID in `OMNIPOST_VENDOR_LIST_UUIDS` (`service.apnidesidukaan-vendors`).
+Key — exact ID wins: `partnerId` / `partner_id` / `dpId` / `dp_id` from
+subscriber metadata / subscriber / top level — tell the Omnipost agent to
+send `subscriber.metadata.partnerId` = the vendor's **User id**, else the
+subscriber **email** as fallback (case-insensitive, role=VENDOR users only,
+all matches flip). This flips **only** `User.isVerified` — approval/KYC
+(`isApproved`, `kycStatus`) is never touched by email confirmation.
+Response/log fields say `deliveryPartnerVerified` / `deliveryPartnerMatched`
+for vendor confirms (documented mapping, same wire shape).
+
+## Customer confirmations → upsert only
+
+`service.apnidesidukaan-customers` has no verify branch (customers are
+`isVerified` at signup): confirms are signature-verified and upserted, no
+flag flips, still 200.
 
 ## DB (this project's own tables)
 
