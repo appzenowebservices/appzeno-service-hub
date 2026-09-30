@@ -1,0 +1,14 @@
+{
+  "event": "subscriber.confirmed",
+  "idempotency_key": "96e5fc8b-2222-4222-8222-222222222222:190c8161-0000-4000-8000-000000000001,190c8161-0000-4000-8000-000000000002",
+  "confirmed_at": "2026-09-29T12:05:00Z",
+  "subscriber": {
+    "uuid": "96e5fc8b-2222-4222-8222-222222222222",
+    "email": "multi.list@example.com",
+    "name": "Multi List"
+  },
+  "lists": [
+    { "uuid": "190c8161-0000-4000-8000-000000000002", "name": "apnidesidukaan-customers" },
+    { "uuid": "190c8161-0000-4000-8000-000000000001", "name": "apnidesidukaan-vendors" }
+  ]
+}

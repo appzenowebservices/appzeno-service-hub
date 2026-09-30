@@ -1,0 +1,14 @@
+{
+  "event": "subscriber.confirmed",
+  "idempotency_key": "96e5fc8b-1111-4111-8111-111111111111:190c8161-0000-4000-8000-000000000001",
+  "confirmed_at": "2026-09-29T12:00:00Z",
+  "subscriber": {
+    "uuid": "96e5fc8b-1111-4111-8111-111111111111",
+    "email": "vendor.owner@example.com",
+    "name": "Vendor Owner"
+  },
+  "lists": [
+    { "uuid": "190c8161-0000-4000-8000-000000000001", "name": "apnidesidukaan-vendors" }
+  ],
+  "future_field_should_be_ignored": { "anything": true }
+}

@@ -108,6 +108,8 @@ model AgentProfile {
   officeAddress String
   gst           String?
   bankDetails   Json?
+  // flipped by the Omnipost subscriber.confirmed webhook (agent list)
+  isVerified    Boolean  @default(false)
 }
 
 model Address {
@@ -224,5 +226,24 @@ model Notification {
   message   String
   isRead    Boolean  @default(false)
   actionUrl String?
+  createdAt DateTime @default(now())
+}
+
+// ── Omnipost webhook receiver (see /webhooks/omnipost) ──
+model NewsletterSubscriber {
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  uuid        String    @unique
+  email       String
+  name        String?
+  listUuids   String[]
+  status      String    @default("confirmed")
+  confirmedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model OmnipostProcessedKey {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  key       String   @unique
   createdAt DateTime @default(now())
 }
