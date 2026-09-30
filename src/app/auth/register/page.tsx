@@ -169,13 +169,10 @@ function RegisterForm() {
         yearsOfExperience: role === "VENDOR" && Number.isInteger(exp) && exp >= 0 && exp <= 60 ? exp : undefined,
         officeAddress: role === "AGENT" && officeAddress.trim() !== "" ? officeAddress.trim() : undefined,
       });
-      const r = await signIn("credentials", { redirect: false, mobile: mobile.trim(), password });
-      if (r?.error) {
-        router.push("/auth/login");
-        return;
-      }
+      // Mailing-list subscribes fire HERE — immediately after account creation,
+      // never after login: new accounts are unverified so the auto-signIn below
+      // is expected to fail, and must not gate the subscription.
       if (role === "AGENT" && em !== "" && agentNews) {
-        // subscribe to agent mailing list — never blocks the signup flow
         subscribeMailingList(em, fullName.trim(), AGENT_LIST_ID).catch(() => undefined);
       }
       if (role === "VENDOR" && em !== "" && vendorNews) {
@@ -183,6 +180,14 @@ function RegisterForm() {
       }
       if (role === "CUSTOMER" && em !== "" && customerNews) {
         subscribeMailingList(em, fullName.trim(), CUSTOMER_LIST_ID).catch(() => undefined);
+      }
+      const r = await signIn("credentials", { redirect: false, mobile: mobile.trim(), password });
+      // NOTE: subscribes fire BEFORE the auto-login below on purpose — new
+      // accounts are unverified, so signIn is expected to fail and must never
+      // gate the mailing-list subscription.
+      if (r?.error) {
+        router.push("/auth/login");
+        return;
       }
       if (role === "CUSTOMER") {
         router.push("/customer/dashboard");
