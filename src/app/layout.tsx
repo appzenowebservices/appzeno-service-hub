@@ -38,6 +38,11 @@ export const metadata: Metadata = {
     shortcut: "/favicon.ico",
     apple: "/apple-touch-icon.png",
   },
+  appleWebApp: {
+    capable: true,
+    title: "ADDies",
+    statusBarStyle: "default",
+  },
 
   // Open Graph (Facebook, LinkedIn, WhatsApp)
   openGraph: {
@@ -82,8 +87,9 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${jakarta.variable}`}>
       <link rel="manifest" href="/manifest.json" />
-        <link rel="apple-touch-icon" href="/icons/logo.webp" />
+        <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
         <meta name="theme-color" content="#0369a1" />
+        <meta name="mobile-web-app-capable" content="yes" />
       <body className="bg-surface text-ink font-sans">
         <NextSSRPlugin routerConfig={extractRouterConfig(ourFileRouter)} />
         <SessionProvider >

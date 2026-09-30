@@ -11,6 +11,14 @@ if (process.env.SUPERADMIN_MOBILE && process.env.SUPERADMIN_PASSWORD_HASH_B64) {
 export const authConfig = {
   secret: process.env.AUTH_SECRET ?? process.env.NEXTAUTH_SECRET,
   trustHost: true,
+  // Unique cookie names: localhost cookies are port-agnostic, so the default
+  // authjs.* names collide with our other apps (e.g. ADDies on :3000) and
+  // produce "no matching decryption secret" noise + surprise logouts.
+  cookies: {
+    sessionToken: { name: "addies.session-token" },
+    callbackUrl: { name: "addies.callback-url" },
+    csrfToken: { name: "addies.csrf-token" },
+  },
   pages: {
     signIn: "/auth/login",
   },
