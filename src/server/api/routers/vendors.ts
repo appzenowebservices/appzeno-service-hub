@@ -270,6 +270,41 @@ export const vendorsRouter = createTRPCRouter({
 
       return { missing, sent: true };
     }),
+
+  // Vendor sets the pincodes they serve — drives area matching for agents.
+  updateServiceArea: protectedProcedure
+    .input(z.object({ pincodes: z.array(z.string().regex(/^\d{6}$/)).max(100) }))
+    .mutation(async ({ ctx, input }) => {
+      const userId = (ctx.session.user as { id: string }).id;
+      const profile = await ctx.db.vendorProfile.findFirst({ where: { userId } });
+      if (!profile) throw new TRPCError({ code: "NOT_FOUND", message: "Vendor profile not found" });
+      return ctx.db.vendorProfile.update({
+        where: { id: profile.id },
+        data: { serviceAreaPincodes: [...new Set(input.pincodes)] },
+      });
+    }),
+
+  // Rider-style accept/decline of an incoming lead.
+  respondLead: protectedProcedure
+    .input(z.object({ leadId: z.string(), accept: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      const userId = (ctx.session.user as { id: string }).id;
+      const lead = await ctx.db.lead.findUnique({
+        where: { id: input.leadId },
+        include: { booking: true },
+      });
+      if (!lead || lead.vendorId !== userId) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Lead not found" });
+      }
+      if (lead.status !== "pending") {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Lead already handled" });
+      }
+      await ctx.db.lead.update({ where: { id: input.leadId }, data: { status: input.accept ? "accepted" : "declined" } });
+      if (input.accept) {
+        await ctx.db.booking.update({ where: { id: lead.bookingId }, data: { status: "ACCEPTED" } });
+      }
+      return { accepted: input.accept, bookingId: lead.bookingId };
+    }),
 });
 
 export type VendorsRouter = typeof vendorsRouter;

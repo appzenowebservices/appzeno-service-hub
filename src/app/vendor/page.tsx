@@ -8,7 +8,7 @@ import { useSession, signOut } from "next-auth/react";
 import {
   LayoutDashboard, Briefcase, Inbox, BadgeCheck, LogOut, Loader2, CheckCircle2,
   Star, IndianRupee, TrendingUp, Clock, ShieldCheck, FileText, UserRound, ChevronRight,
-  X, ArrowUpRight, Building2, Store, Award, Bell, BellOff, CheckCheck,
+  X, ArrowUpRight, Building2, Store, Award, Bell, BellOff, CheckCheck, Check, Plus,
 } from "lucide-react";
 import { trpc } from "~/trpc/react";
 import { generateReactHelpers } from "@uploadthing/react";
@@ -16,7 +16,7 @@ import type { OurFileRouter } from "~/app/uploadthing";
 
 const { useUploadThing } = generateReactHelpers<OurFileRouter>();
 
-type Tab = "overview" | "jobs" | "leads" | "kyc";
+type Tab = "overview" | "orders" | "jobs" | "kyc";
 
 function inr(n: number): string {
   return `₹${Math.round(n).toLocaleString("en-IN")}`;
@@ -131,6 +131,10 @@ export default function VendorDashboard() {
   const savePhoto = (url: string) => { setPhoto(url); setKycDoc.mutate({ profilePhoto: url }); };
   const notifQ = trpc.admin.notifications.useQuery({ limit: 10 }, { enabled: !!vendorId && status === "authenticated" });
   const markRead = trpc.admin.markNotificationRead.useMutation({ onSuccess: () => notifQ.refetch() });
+  const respondLead = trpc.vendors.respondLead.useMutation({ onSuccess: () => leadsQ.refetch() });
+  const updateServiceArea = trpc.vendors.updateServiceArea.useMutation({ onSuccess: () => meQ.refetch() });
+  const [pinInput, setPinInput] = useState("");
+  const [pinErr, setPinErr] = useState("");
 
   const profile = meQ.data as Profile | undefined;
   const profileLoaded = !!profile;
@@ -198,9 +202,9 @@ export default function VendorDashboard() {
 
   const NAV: { key: Tab; label: string; Icon: typeof LayoutDashboard; badge?: number }[] = [
     { key: "overview", label: "Overview", Icon: LayoutDashboard },
+    { key: "orders", label: "Live Orders", Icon: Inbox, badge: pendingLeads },
     { key: "jobs", label: "My Jobs", Icon: Briefcase, badge: stats?.pendingJobs },
-    { key: "leads", label: "New Leads", Icon: Inbox, badge: pendingLeads },
-    { key: "kyc", label: "KYC & Documents", Icon: ShieldCheck },
+    { key: "kyc", label: "KYC & Area", Icon: ShieldCheck },
   ];
 
   return (
@@ -327,7 +331,7 @@ export default function VendorDashboard() {
                 <div className="card">
                   <div className="mb-2 flex items-center justify-between">
                     <p className="font-extrabold text-ink">New leads</p>
-                    <button onClick={() => setTab("leads")} className="text-[13px] font-bold text-primary-600">View all →</button>
+                    <button onClick={() => setTab("orders")} className="text-[13px] font-bold text-primary-600">View all →</button>
                   </div>
                   {leads.length === 0 ? (
                     <p className="sub py-6 text-center">No leads yet — complete your KYC to get booked.</p>
@@ -367,42 +371,101 @@ export default function VendorDashboard() {
               {jobs.length === 0 ? (
                 <p className="sub py-8 text-center">No jobs assigned yet.</p>
               ) : (
-                jobs.map((j) => (
-                  <div key={j.id} className="row-line flex flex-wrap items-center justify-between gap-2 !py-3 text-sm">
-                    <div className="min-w-0">
-                      <p className="truncate font-bold text-ink">{j.description} <span className="font-extrabold text-primary-600">• {inr(j.totalAmount)}</span></p>
-                      <p className="text-xs text-muted">Customer: {j.customer?.fullName ?? "—"} • <span className="chip chip-primary ml-0.5">{j.status.replace(/_/g, " ")}</span></p>
+                jobs.map((j) => {
+                  const FLOW = ["PENDING", "ASSIGNED", "ACCEPTED", "IN_PROGRESS", "COMPLETED"] as const;
+                  const idx = FLOW.indexOf(j.status as (typeof FLOW)[number]);
+                  return (
+                  <div key={j.id} className="row-line !py-4 text-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="truncate font-bold text-ink">{j.description} <span className="font-extrabold text-primary-600">• {inr(j.totalAmount)}</span></p>
+                        <p className="text-xs text-muted">Customer: {j.customer?.fullName ?? "—"}</p>
+                      </div>
+                      <div className="flex gap-1.5">
+                        {["ACCEPTED", "IN_PROGRESS", "COMPLETED"].map((s) => (
+                          <button key={s} onClick={() => updateStatus.mutate({ id: j.id, status: s as "ACCEPTED" })} disabled={updateStatus.isPending} className="rounded-full bg-surface px-3 py-1 text-[11px] font-bold text-body hover:bg-primary-50 hover:text-primary-700 disabled:opacity-50">{s.replace(/_/g, " ")}</button>
+                        ))}
+                      </div>
                     </div>
-                    <div className="flex gap-1.5">
-                      {["ACCEPTED", "IN_PROGRESS", "COMPLETED"].map((s) => (
-                        <button key={s} onClick={() => updateStatus.mutate({ id: j.id, status: s as "ACCEPTED" })} disabled={updateStatus.isPending} className="rounded-full bg-surface px-3 py-1 text-[11px] font-bold text-body hover:bg-primary-50 hover:text-primary-700 disabled:opacity-50">{s.replace(/_/g, " ")}</button>
-                      ))}
+                    {/* status timeline */}
+                    <div className="mt-3 flex items-center gap-0">
+                      {FLOW.map((s, i) => {
+                        const done = idx >= i;
+                        return (
+                          <div key={s} className="flex flex-1 items-center last:flex-none">
+                            <div className="flex flex-col items-center gap-1">
+                              <div className={`flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-extrabold ${done ? (j.status === s ? "bg-primary-600 text-white ring-2 ring-primary-200" : "bg-success text-white") : "bg-surface text-muted ring-1 ring-line"}`}>
+                                {done && j.status !== s ? <Check size={11} /> : s === j.status ? <Clock size={11} /> : i + 1}
+                              </div>
+                              <p className={`text-[9px] font-bold ${done ? "text-primary-700" : "text-muted"}`}>{s.replace(/_/g, " ")}</p>
+                            </div>
+                            {i < FLOW.length - 1 ? <div className={`mx-1 mb-4 h-0.5 flex-1 rounded ${idx > i ? "bg-success" : "bg-line"}`} /> : null}
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
-                ))
+                );
+              })
               )}
             </div>
           )}
 
-          {/* ═══════ LEADS ═══════ */}
-          {tab === "leads" && (
-            <div className="card">
-              <div className="mb-2 flex items-center justify-between">
-                <p className="font-extrabold text-ink">New leads <span className="chip chip-accent ml-1">{pendingLeads} pending</span></p>
+          {/* ═══════ LIVE ORDERS (rider-style) ═══════ */}
+          {tab === "orders" && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="font-extrabold text-ink">Incoming orders <span className="chip chip-accent ml-1">{pendingLeads} awaiting you</span></p>
+                <span className="chip chip-primary">🔴 Live</span>
               </div>
-              {leads.length === 0 ? (
-                <p className="sub py-8 text-center">No leads yet — approved vendors get matched to bookings automatically.</p>
+              {leads.filter((l) => l.status === "pending").length === 0 ? (
+                <div className="card">
+                  <p className="sub py-8 text-center">No incoming orders right now — approved vendors get matched to bookings automatically. Keep your area pincodes updated in KYC & Area.</p>
+                </div>
               ) : (
-                leads.map((l) => (
-                  <div key={l.id} className="row-line flex items-center justify-between gap-2 !py-3 text-sm">
-                    <div className="min-w-0">
-                      <p className="truncate font-bold text-ink">{l.booking?.description?.slice(0, 60)}</p>
-                      <p className="text-xs text-muted">₹{l.booking?.totalAmount} • {l.booking?.createdAt ? new Date(l.booking.createdAt).toLocaleString("en-IN") : ""}</p>
+                leads.filter((l) => l.status === "pending").map((l) => (
+                  <div key={l.id} className="card relative overflow-hidden !p-4">
+                    <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-accent-400 to-primary-600" />
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="font-extrabold leading-snug text-ink">{l.booking?.description?.slice(0, 80)}</p>
+                        <div className="mt-1.5 flex flex-wrap gap-1.5 text-xs font-semibold text-muted">
+                          <span className="chip chip-primary">₹{l.booking?.totalAmount}</span>
+                          <span className="chip chip-neutral">📅 {l.booking?.preferredDate ?? "—"} {l.booking?.timeSlot?.label ?? ""}</span>
+                        </div>
+                        <p className="mt-1 text-xs text-muted">{l.booking?.createdAt ? new Date(l.booking.createdAt).toLocaleString("en-IN") : ""}</p>
+                      </div>
+                      <div className="flex shrink-0 gap-2">
+                        <button
+                          onClick={() => respondLead.mutate({ leadId: l.id, accept: true })}
+                          disabled={respondLead.isPending}
+                          className="rounded-full bg-success px-5 py-2 text-sm font-extrabold text-white hover:brightness-95 disabled:opacity-50"
+                        >
+                          <Check size={15} className="mr-1 inline" /> Accept
+                        </button>
+                        <button
+                          onClick={() => respondLead.mutate({ leadId: l.id, accept: false })}
+                          disabled={respondLead.isPending}
+                          className="rounded-full border border-line bg-white px-4 py-2 text-sm font-bold text-body hover:bg-danger-soft hover:text-danger disabled:opacity-50"
+                        >
+                          Decline
+                        </button>
+                      </div>
                     </div>
-                    <span className={`chip shrink-0 ${l.status === "pending" ? "chip-accent" : l.status === "accepted" ? "chip-success" : "chip-neutral"}`}>{l.status}</span>
                   </div>
                 ))
               )}
+              {leads.filter((l) => l.status === "accepted").length > 0 ? (
+                <div className="card">
+                  <p className="mb-2 font-extrabold text-ink">Accepted — in progress</p>
+                  {leads.filter((l) => l.status === "accepted").map((l) => (
+                    <div key={l.id} className="row-line flex items-center justify-between gap-2 text-sm">
+                      <span className="truncate text-body">{l.booking?.description?.slice(0, 55)}</span>
+                      <span className="chip chip-success shrink-0">Accepted</span>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
             </div>
           )}
 
@@ -429,6 +492,37 @@ export default function VendorDashboard() {
                 {!isApproved && kycStatus !== "UNDER_REVIEW" ? (
                   <button onClick={() => setKycOpen(true)} className="btn-accent mt-4 w-full !py-3">Start KYC now</button>
                 ) : null}
+              </div>
+              <div className="card">
+                <p className="font-extrabold text-ink">Service area</p>
+                <p className="sub mb-3">Pincodes you serve — agents route & monitor you inside your area.</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {(profile?.vendorProfile?.serviceAreaPincodes ?? []).map((p) => (
+                    <span key={p} className="inline-flex items-center gap-1 rounded-full border border-primary-200 bg-primary-50 px-2.5 py-1 text-xs font-bold text-primary-700">
+                      {p}
+                      <button type="button" onClick={() => updateServiceArea.mutate({ pincodes: (profile?.vendorProfile?.serviceAreaPincodes ?? []).filter((x) => x !== p) })} className="text-primary-400 hover:text-danger">✕</button>
+                    </span>
+                  ))}
+                  {(profile?.vendorProfile?.serviceAreaPincodes ?? []).length === 0 ? <p className="text-xs text-muted">No pincodes yet — add the areas you serve.</p> : null}
+                </div>
+                <div className="mt-3 flex gap-2">
+                  <input value={pinInput} onChange={(e) => setPinInput(e.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" placeholder="6-digit pincode" className="input !py-2" />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!/^\d{6}$/.test(pinInput)) { setPinErr("Enter a valid 6-digit pincode."); return; }
+                      setPinErr("");
+                      const cur = profile?.vendorProfile?.serviceAreaPincodes ?? [];
+                      updateServiceArea.mutate({ pincodes: [...cur, pinInput] });
+                      setPinInput("");
+                    }}
+                    disabled={updateServiceArea.isPending}
+                    className="btn-primary shrink-0 !py-2"
+                  >
+                    <Plus size={14} /> Add
+                  </button>
+                </div>
+                {pinErr !== "" ? <p className="mt-1 text-xs font-semibold text-danger">{pinErr}</p> : null}
               </div>
               <div className="card">
                 <p className="font-extrabold text-ink">Why KYC matters</p>
