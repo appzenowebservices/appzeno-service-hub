@@ -8,13 +8,13 @@ import { signOut, useSession } from "next-auth/react";
 import {
   LayoutDashboard, UserCheck, CalendarClock, Store, Users, MapPinned, Tags, Wallet,
   Megaphone, Search, Check, Ban, RefreshCw, Plus, LogOut, IndianRupee, TrendingUp,
-  Clock, AlertTriangle, Star, ExternalLink, Receipt, Send, Globe, ChevronRight, Bell,
+  Clock, AlertTriangle, Star, ExternalLink, Receipt, Send, Globe, ChevronRight, Bell, Loader2,
 } from "lucide-react";
 import { trpc } from "~/trpc/react";
 import { generateReactHelpers } from "@uploadthing/react";
 import type { OurFileRouter } from "~/app/uploadthing";
 import { LoadingConsole, StatSkeleton, ChartSkeleton, ListSkeleton, InlineSync } from "~/app/admin/components/loaders";
-import ServingAreasMap from "~/app/admin/components/ServingAreasMap";
+import ServingAreasMap, { geocodePincode, type AreaPin } from "~/app/admin/components/ServingAreasMap";
 
 const { useUploadThing } = generateReactHelpers<OurFileRouter>();
 
@@ -245,6 +245,8 @@ export default function AdminPage() {
   const [subForm, setSubForm] = useState({ catId: "", name: "", price: "", unit: "per job" });
   const [catSearch, setCatSearch] = useState("");
   const [selectedArea, setSelectedArea] = useState<string | null>(null);
+  const [areaPins, setAreaPins] = useState<AreaPin[]>([]);
+  const [geoLoading, setGeoLoading] = useState(false);
   const [newPin, setNewPin] = useState("");
   const [newArea, setNewArea] = useState({ city: "", state: "", lat: 26.8467, lng: 80.9462, pincodes: "" });
   const [areaMsg, setAreaMsg] = useState("");
@@ -333,6 +335,26 @@ export default function AdminPage() {
   const cats = useMemo(() => ((catsQ.data as CatRow[] | undefined) ?? []), [catsQ.data]);
   const areas = useMemo(() => ((areasQ.data as { id: string; city: string; state: string; lat: number; lng: number; isActive: boolean; pincodes: string[] }[] | undefined) ?? []), [areasQ.data]);
   const selArea = areas.find((a) => a.id === selectedArea) ?? null;
+
+  // Geocode the selected city's pincodes into map pins (each pincode = an address point).
+  useEffect(() => {
+    if (!selArea) { setAreaPins([]); setGeoLoading(false); return; }
+    let cancelled = false;
+    setAreaPins([]);
+    setGeoLoading(true);
+    const pins: AreaPin[] = [];
+    (async () => {
+      // Nominatim allows ~1 req/sec — serialize with a delay and skip failures.
+      for (const pin of selArea.pincodes) {
+        if (cancelled) return;
+        const r = await geocodePincode(pin);
+        if (r) pins.push(r);
+        await new Promise((res) => setTimeout(res, 400));
+      }
+      if (!cancelled) { setAreaPins(pins); setGeoLoading(false); }
+    })();
+    return () => { cancelled = true; };
+  }, [selArea]);
   const visibleCats = useMemo(() => {
     const q = catSearch.trim().toLowerCase();
     if (q === "") return cats;
@@ -1083,25 +1105,43 @@ export default function AdminPage() {
                   </Card>
                   <div className="space-y-2">
                     {areas.map((a) => (
-                      <button key={a.id} onClick={() => setSelectedArea(a.id)} className={`w-full rounded-2xl border p-3 text-left transition-all ${selectedArea === a.id ? "border-primary-300 bg-primary-50 ring-1 ring-primary-200" : "border-line bg-white hover:border-primary-200"}`}>
-                        <div className="flex items-center justify-between">
-                          <p className="font-extrabold text-ink">{a.city} <span className="text-xs font-semibold text-muted">• {a.state}</span></p>
-                          <span className={`chip ${a.isActive ? "chip-success" : "chip-neutral"}`}>{a.isActive ? "Active" : "Hidden"}</span>
-                        </div>
-                        <p className="mt-1 text-xs font-semibold text-body">{a.pincodes.length} pincodes • 📍 {a.lat.toFixed(4)}, {a.lng.toFixed(4)}</p>
-                      </button>
+                      <div key={a.id} className={`overflow-hidden rounded-2xl border transition-all ${selectedArea === a.id ? "border-primary-300 ring-1 ring-primary-200" : "border-line"}`}>
+                        <button onClick={() => setSelectedArea(selectedArea === a.id ? null : a.id)} className={`w-full p-3 text-left ${selectedArea === a.id ? "bg-primary-50" : "bg-white hover:bg-surface"}`}>
+                          <div className="flex items-center justify-between">
+                            <p className="font-extrabold text-ink">{a.city} <span className="text-xs font-semibold text-muted">• {a.state}</span></p>
+                            <span className={`chip ${a.isActive ? "chip-success" : "chip-neutral"}`}>{a.isActive ? "Active" : "Hidden"}</span>
+                          </div>
+                          <p className="mt-1 text-xs font-semibold text-body">{a.pincodes.length} pincodes • 📍 {a.lat.toFixed(4)}, {a.lng.toFixed(4)}</p>
+                        </button>
+                        {selectedArea === a.id ? (
+                          <div className="border-t border-primary-100 bg-white p-3">
+                            <p className="mb-1.5 text-[11px] font-extrabold uppercase tracking-wider text-muted">All pincodes in {a.city}</p>
+                            <div className="flex max-h-32 flex-wrap gap-1.5 overflow-y-auto">
+                              {a.pincodes.map((p) => (
+                                <span key={p} className="rounded-md border border-line bg-surface px-2 py-0.5 font-mono text-[11px] font-bold text-body">{p}</span>
+                              ))}
+                              {a.pincodes.length === 0 ? <p className="text-xs text-muted">No pincodes yet — add them in the panel on the right.</p> : null}
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
                     ))}
                   </div>
                 </div>
 
                 <Card className="!p-3">
-                  <div className="mb-2 overflow-hidden rounded-2xl border border-line" style={{ height: 340 }}>
+                  <div className="relative mb-2 overflow-hidden rounded-2xl border border-line" style={{ height: 340 }}>
                     <ServingAreasMap
                       areas={areas}
-                      selectedId={selectedArea}
+                      pins={areaPins}
                       onSelect={setSelectedArea}
                       onPickCoords={(lat, lng) => setNewArea((p) => ({ ...p, lat, lng }))}
                     />
+                    {geoLoading ? (
+                      <div className="pointer-events-none absolute inset-0 z-[500] flex items-center justify-center bg-white/40">
+                        <span className="rounded-full bg-white px-3.5 py-1.5 text-xs font-bold text-primary-700 shadow-card"><Loader2 size={13} className="mr-1.5 inline animate-spin" /> Geocoding {selArea?.pincodes.length ?? 0} pincodes…</span>
+                      </div>
+                    ) : null}
                   </div>
                   {selArea ? (
                     <div className="mt-3">
