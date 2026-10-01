@@ -14,10 +14,11 @@ import { trpc } from "~/trpc/react";
 import { generateReactHelpers } from "@uploadthing/react";
 import type { OurFileRouter } from "~/app/uploadthing";
 import { LoadingConsole, StatSkeleton, ChartSkeleton, ListSkeleton, InlineSync } from "~/app/admin/components/loaders";
+import ServingAreasMap from "~/app/admin/components/ServingAreasMap";
 
 const { useUploadThing } = generateReactHelpers<OurFileRouter>();
 
-type Tab = "overview" | "approvals" | "bookings" | "vendors" | "users" | "agents" | "categories" | "finance" | "broadcast";
+type Tab = "overview" | "approvals" | "bookings" | "vendors" | "users" | "agents" | "categories" | "areas" | "finance" | "broadcast";
 
 const STATUSES = ["ALL", "PENDING", "ASSIGNED", "ACCEPTED", "IN_PROGRESS", "COMPLETED", "CANCELLED", "DISPUTED"] as const;
 const SET_STATUSES = ["PENDING", "ASSIGNED", "ACCEPTED", "IN_PROGRESS", "COMPLETED", "CANCELLED", "DISPUTED"] as const;
@@ -243,6 +244,10 @@ export default function AdminPage() {
   const [newCat, setNewCat] = useState({ name: "", icon: "🔧", commission: "10", description: "" });
   const [subForm, setSubForm] = useState({ catId: "", name: "", price: "", unit: "per job" });
   const [catSearch, setCatSearch] = useState("");
+  const [selectedArea, setSelectedArea] = useState<string | null>(null);
+  const [newPin, setNewPin] = useState("");
+  const [newArea, setNewArea] = useState({ city: "", state: "", lat: 26.8467, lng: 80.9462, pincodes: "" });
+  const [areaMsg, setAreaMsg] = useState("");
 
   useEffect(() => {
     const t = setTimeout(() => setUserSearchDeb(userSearch.trim()), 400);
@@ -269,10 +274,18 @@ export default function AdminPage() {
   const catsQ = trpc.categories.getAll.useQuery({ includeInactive: true }, { enabled: authed && tab === "categories" });
   const walletQ = trpc.admin.walletTx.useQuery({ limit: 25 }, { enabled: authed && tab === "finance" });
   const notifsQ = trpc.admin.notifications.useQuery({ limit: 10 }, { enabled: authed && tab === "broadcast" });
+  const areasQ = trpc.areas.getAll.useQuery(undefined, { enabled: authed && tab === "areas" });
 
   const refreshAll = () => {
     void utils.invalidate();
   };
+
+  const createArea = trpc.areas.create.useMutation({ onSuccess: () => { setNewArea({ city: "", state: "", lat: 26.8467, lng: 80.9462, pincodes: "" }); setAreaMsg("Area added."); void areasQ.refetch(); } });
+  const updateArea = trpc.areas.update.useMutation({ onSuccess: () => void areasQ.refetch() });
+  const addPin = trpc.areas.addPincode.useMutation({ onSuccess: () => { setNewPin(""); void areasQ.refetch(); } });
+  const removePin = trpc.areas.removePincode.useMutation({ onSuccess: () => void areasQ.refetch() });
+  const removeArea = trpc.areas.remove.useMutation({ onSuccess: () => { setSelectedArea(null); void areasQ.refetch(); } });
+  const seedAreas = trpc.areas.seed.useMutation({ onSuccess: () => void areasQ.refetch() });
 
   const toggleUser = trpc.users.toggleActive.useMutation({ onSuccess: () => void usersQ.refetch() });
   const approveVendor = trpc.vendors.approveVendor.useMutation({ onSuccess: () => { void vendorsQ.refetch(); void statsQ.refetch(); } });
@@ -318,6 +331,8 @@ export default function AdminPage() {
   }, [vendors, vendorSearch]);
   const agents = useMemo(() => ((agentsQ.data as AgentRow[] | undefined) ?? []), [agentsQ.data]);
   const cats = useMemo(() => ((catsQ.data as CatRow[] | undefined) ?? []), [catsQ.data]);
+  const areas = useMemo(() => ((areasQ.data as { id: string; city: string; state: string; lat: number; lng: number; isActive: boolean; pincodes: string[] }[] | undefined) ?? []), [areasQ.data]);
+  const selArea = areas.find((a) => a.id === selectedArea) ?? null;
   const visibleCats = useMemo(() => {
     const q = catSearch.trim().toLowerCase();
     if (q === "") return cats;
@@ -353,6 +368,7 @@ export default function AdminPage() {
     { key: "users", label: "Users", Icon: Users },
     { key: "agents", label: "Agents", Icon: MapPinned },
     { key: "categories", label: "Categories", Icon: Tags },
+    { key: "areas", label: "Areas & Pincodes", Icon: MapPinned },
     { key: "finance", label: "Finance", Icon: Wallet },
     { key: "broadcast", label: "Broadcast", Icon: Megaphone },
   ];
@@ -1022,6 +1038,101 @@ export default function AdminPage() {
               </div>
             </div>
             </div>
+            </div>
+          )}
+
+          {/* ══════════ AREAS & PINCODES ══════════ */}
+          {tab === "areas" && (
+            <div className="space-y-3">
+              {areas.length === 0 && !areasQ.isLoading ? (
+                <Card>
+                  <Empty
+                    title="No serving areas yet"
+                    hint="Seed the default cities (Lucknow, Barabanki, Gurgaon, Gorakhpur) with their well-known pincodes in one click, then manage coverage on the map."
+                    action={<button onClick={() => seedAreas.mutate()} disabled={seedAreas.isPending} className="btn-accent"><Plus size={15} /> {seedAreas.isPending ? "Seeding…" : "Seed default cities"}</button>}
+                  />
+                </Card>
+              ) : null}
+              {areaMsg !== "" ? <p className="rounded-xl bg-success-soft px-3 py-2 text-[13px] font-semibold text-success">{areaMsg}</p> : null}
+              <div className="grid gap-3 lg:grid-cols-[380px_minmax(0,1fr)]">
+                <div className="space-y-3">
+                  <Card className="!p-3">
+                    <div className="mb-2 flex items-center justify-between">
+                      <p className="text-sm font-extrabold text-ink">Add serving city</p>
+                      {areas.length > 0 ? <span className="chip chip-neutral">{areas.length} cities</span> : null}
+                    </div>
+                    <div className="space-y-2">
+                      <div className="grid grid-cols-2 gap-2">
+                        <input value={newArea.city} onChange={(e) => setNewArea({ ...newArea, city: e.target.value })} placeholder="City — e.g. Lucknow" className="input" />
+                        <input value={newArea.state} onChange={(e) => setNewArea({ ...newArea, state: e.target.value })} placeholder="State" className="input" />
+                      </div>
+                      <textarea value={newArea.pincodes} onChange={(e) => setNewArea({ ...newArea, pincodes: e.target.value })} rows={2} placeholder="Pincodes (comma separated) — e.g. 226001, 226010" className="input" />
+                      <p className="text-[11px] font-semibold text-muted">📍 Center {newArea.lat.toFixed(4)}, {newArea.lng.toFixed(4)} — click the map to reposition, or use defaults.</p>
+                      <button
+                        onClick={() => {
+                          const pincodes = newArea.pincodes.split(",").map((s) => s.trim()).filter((s) => /^\d{6}$/.test(s));
+                          if (newArea.city.trim().length < 2) { setAreaMsg("Enter a city name."); return; }
+                          createArea.mutate({ city: newArea.city.trim(), state: newArea.state.trim() || "—", lat: newArea.lat, lng: newArea.lng, pincodes });
+                        }}
+                        disabled={createArea.isPending}
+                        className="btn-primary w-full disabled:opacity-50"
+                      >
+                        <Plus size={15} /> {createArea.isPending ? "Adding…" : "Add city"}
+                      </button>
+                    </div>
+                  </Card>
+                  <div className="space-y-2">
+                    {areas.map((a) => (
+                      <button key={a.id} onClick={() => setSelectedArea(a.id)} className={`w-full rounded-2xl border p-3 text-left transition-all ${selectedArea === a.id ? "border-primary-300 bg-primary-50 ring-1 ring-primary-200" : "border-line bg-white hover:border-primary-200"}`}>
+                        <div className="flex items-center justify-between">
+                          <p className="font-extrabold text-ink">{a.city} <span className="text-xs font-semibold text-muted">• {a.state}</span></p>
+                          <span className={`chip ${a.isActive ? "chip-success" : "chip-neutral"}`}>{a.isActive ? "Active" : "Hidden"}</span>
+                        </div>
+                        <p className="mt-1 text-xs font-semibold text-body">{a.pincodes.length} pincodes • 📍 {a.lat.toFixed(4)}, {a.lng.toFixed(4)}</p>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <Card className="!p-3">
+                  <div className="mb-2 overflow-hidden rounded-2xl border border-line" style={{ height: 340 }}>
+                    <ServingAreasMap
+                      areas={areas}
+                      selectedId={selectedArea}
+                      onSelect={setSelectedArea}
+                      onPickCoords={(lat, lng) => setNewArea((p) => ({ ...p, lat, lng }))}
+                    />
+                  </div>
+                  {selArea ? (
+                    <div className="mt-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="font-extrabold text-ink">{selArea.city} — {selArea.pincodes.length} pincodes</p>
+                        <div className="flex gap-1.5">
+                          <button onClick={() => updateArea.mutate({ id: selArea.id, isActive: !selArea.isActive })} className={`rounded-full px-3 py-1 text-xs font-bold ${selArea.isActive ? "btn-danger-ghost" : "btn-primary !px-3.5 !py-1.5 !text-xs"}`}>
+                            {selArea.isActive ? "Hide" : "Activate"}
+                          </button>
+                          <button onClick={() => { if (window.confirm(`Delete ${selArea.city} area?`)) removeArea.mutate({ id: selArea.id }); }} className="btn-danger-ghost">Delete</button>
+                        </div>
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {selArea.pincodes.map((p) => (
+                          <span key={p} className="inline-flex items-center gap-1 rounded-full border border-primary-200 bg-primary-50 px-2.5 py-1 text-xs font-bold text-primary-700">
+                            {p}
+                            <button type="button" onClick={() => removePin.mutate({ id: selArea.id, pincode: p })} className="text-primary-400 hover:text-danger">✕</button>
+                          </span>
+                        ))}
+                        {selArea.pincodes.length === 0 ? <p className="text-xs text-muted">No pincodes — add below.</p> : null}
+                      </div>
+                      <div className="mt-2 flex gap-2">
+                        <input value={newPin} onChange={(e) => setNewPin(e.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" placeholder="Add 6-digit pincode" className="input !py-2" />
+                        <button onClick={() => { if (/^\d{6}$/.test(newPin)) addPin.mutate({ id: selArea.id, pincode: newPin }); }} disabled={addPin.isPending} className="btn-primary shrink-0 !py-2"><Plus size={14} /> Add</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="sub py-6 text-center">Select an area from the list (or a marker on the map) to manage its pincodes. Click the map to set a new city&apos;s center.</p>
+                  )}
+                </Card>
+              </div>
             </div>
           )}
 

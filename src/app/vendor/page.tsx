@@ -8,7 +8,7 @@ import { useSession, signOut } from "next-auth/react";
 import {
   LayoutDashboard, Briefcase, Inbox, BadgeCheck, LogOut, Loader2, CheckCircle2,
   Star, IndianRupee, TrendingUp, Clock, ShieldCheck, FileText, UserRound, ChevronRight,
-  X, ArrowUpRight, Building2, Store, Award, Bell, BellOff, CheckCheck, Check, Plus,
+  X, ArrowUpRight, Building2, Store, Award, Bell, BellOff, CheckCheck, Check, MapPin,
 } from "lucide-react";
 import { trpc } from "~/trpc/react";
 import { generateReactHelpers } from "@uploadthing/react";
@@ -40,6 +40,8 @@ interface Profile {
     panDoc?: string | null;
     profilePhoto?: string | null;
     serviceCategories: string[];
+    serviceAreaPincodes: string[];
+    streetAddress?: string | null;
   } | null;
 }
 interface BookingRow { id: string; status: string; description: string; totalAmount: number; customer?: { fullName?: string } | null }
@@ -133,13 +135,17 @@ export default function VendorDashboard() {
   const markRead = trpc.admin.markNotificationRead.useMutation({ onSuccess: () => notifQ.refetch() });
   const respondLead = trpc.vendors.respondLead.useMutation({ onSuccess: () => leadsQ.refetch() });
   const updateServiceArea = trpc.vendors.updateServiceArea.useMutation({ onSuccess: () => meQ.refetch() });
-  const [pinInput, setPinInput] = useState("");
+  const setAddress = trpc.areas.setAddress.useMutation({ onSuccess: () => { meQ.refetch(); setStreet(""); } });
   const [pinErr, setPinErr] = useState("");
+  const [street, setStreet] = useState("");
 
   const profile = meQ.data as Profile | undefined;
   const profileLoaded = !!profile;
   const isApproved = profile?.vendorProfile?.isApproved ?? false;
   const kycStatus = profile?.vendorProfile?.kycStatus ?? "PENDING";
+  const servingQ = trpc.areas.byCity.useQuery({ city: profile?.city ?? "" }, { enabled: !!profile?.city && !!profile?.vendorProfile?.streetAddress });
+  const serving = servingQ.data as { city?: string; pincodes?: string[]; isActive?: boolean } | null | undefined;
+  const canPickArea = !!profile?.vendorProfile?.streetAddress;
 
   // Autofill business fields from the profile the first time the modal opens
   useEffect(() => {
@@ -495,34 +501,57 @@ export default function VendorDashboard() {
               </div>
               <div className="card">
                 <p className="font-extrabold text-ink">Service area</p>
-                <p className="sub mb-3">Pincodes you serve — agents route & monitor you inside your area.</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {(profile?.vendorProfile?.serviceAreaPincodes ?? []).map((p) => (
-                    <span key={p} className="inline-flex items-center gap-1 rounded-full border border-primary-200 bg-primary-50 px-2.5 py-1 text-xs font-bold text-primary-700">
-                      {p}
-                      <button type="button" onClick={() => updateServiceArea.mutate({ pincodes: (profile?.vendorProfile?.serviceAreaPincodes ?? []).filter((x) => x !== p) })} className="text-primary-400 hover:text-danger">✕</button>
-                    </span>
-                  ))}
-                  {(profile?.vendorProfile?.serviceAreaPincodes ?? []).length === 0 ? <p className="text-xs text-muted">No pincodes yet — add the areas you serve.</p> : null}
-                </div>
-                <div className="mt-3 flex gap-2">
-                  <input value={pinInput} onChange={(e) => setPinInput(e.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" placeholder="6-digit pincode" className="input !py-2" />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!/^\d{6}$/.test(pinInput)) { setPinErr("Enter a valid 6-digit pincode."); return; }
-                      setPinErr("");
-                      const cur = profile?.vendorProfile?.serviceAreaPincodes ?? [];
-                      updateServiceArea.mutate({ pincodes: [...cur, pinInput] });
-                      setPinInput("");
-                    }}
-                    disabled={updateServiceArea.isPending}
-                    className="btn-primary shrink-0 !py-2"
-                  >
-                    <Plus size={14} /> Add
-                  </button>
-                </div>
-                {pinErr !== "" ? <p className="mt-1 text-xs font-semibold text-danger">{pinErr}</p> : null}
+                <p className="sub mb-3">Only pincodes we serve in your city ({profile?.city ?? "—"}) — agents monitor you inside your area.</p>
+
+                {!canPickArea ? (
+                  <>
+                    <p className="rounded-xl bg-accent-50 px-3.5 py-2.5 text-[13px] font-semibold text-accent-600">
+                      You don&apos;t have a service address yet — set your street/city first, then pick your serving pincodes.
+                    </p>
+                    <div className="mt-3 flex flex-col gap-2">
+                      <input value={street} onChange={(e) => setStreet(e.target.value)} placeholder={`Street / colony — e.g. MG Road, ${profile?.city ?? ""}`} className="input !py-2.5" />
+                      <button
+                        type="button"
+                        onClick={() => { if (street.trim().length < 3) { setPinErr("Enter a valid street address."); return; } setPinErr(""); setAddress.mutate({ streetAddress: street.trim() }); }}
+                        disabled={setAddress.isPending}
+                        className="btn-accent !py-2.5"
+                      >
+                        <MapPin size={15} /> Save my service address
+                      </button>
+                      {pinErr !== "" ? <p className="text-xs font-semibold text-danger">{pinErr}</p> : null}
+                    </div>
+                  </>
+                ) : serving?.isActive === false || !serving ? (
+                  <p className="rounded-xl bg-accent-50 px-3.5 py-2.5 text-[13px] font-semibold text-accent-600">
+                    We don&apos;t serve <b className="text-ink">{profile?.city}</b> yet. Ask your agent/admin to add it to serving areas.
+                  </p>
+                ) : (
+                  <>
+                    <p className="mb-2 text-xs font-bold text-body">Your address: <span className="text-ink">{profile?.vendorProfile?.streetAddress}</span></p>
+                    <p className="mb-2 text-xs font-extrabold uppercase tracking-wider text-muted">Serving pincodes in {serving.city}</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {(serving.pincodes ?? []).map((p) => {
+                        const sel = (profile?.vendorProfile?.serviceAreaPincodes ?? []).includes(p);
+                        return (
+                          <button
+                            key={p}
+                            type="button"
+                            onClick={() => {
+                              const cur = profile?.vendorProfile?.serviceAreaPincodes ?? [];
+                              updateServiceArea.mutate({ pincodes: sel ? cur.filter((x) => x !== p) : [...cur, p] });
+                            }}
+                            disabled={updateServiceArea.isPending}
+                            className={`rounded-full border px-3 py-1.5 text-xs font-bold transition-all ${sel ? "border-primary-600 bg-primary-600 text-white shadow-sm" : "border-line bg-white text-body hover:border-primary-300 hover:text-primary-700"}`}
+                          >
+                            {p}
+                          </button>
+                        );
+                      })}
+                      {!serving.pincodes?.length ? <p className="text-xs text-muted">No pincodes configured for this city yet.</p> : null}
+                    </div>
+                    <p className="mt-2 text-[11px] font-medium text-muted">Select the pincodes you serve — your selections are what agents see for area monitoring.</p>
+                  </>
+                )}
               </div>
               <div className="card">
                 <p className="font-extrabold text-ink">Why KYC matters</p>

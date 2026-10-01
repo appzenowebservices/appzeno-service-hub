@@ -107,6 +107,8 @@ model VendorProfile {
   profilePhoto     String?
   gst              String?
   kycSubmittedAt   DateTime?
+  // ── Service address — drives which serving pincodes the vendor can pick ──
+  streetAddress    String?
 }
 
 model AgentProfile {
@@ -122,6 +124,8 @@ model AgentProfile {
   bankDetails   Json?
   // flipped by the Omnipost subscriber.confirmed webhook (agent list)
   isVerified    Boolean  @default(false)
+  // ── Service address — drives which serving pincodes the agent can pick ──
+  streetAddress String?
 }
 
 model Address {
@@ -260,5 +264,17 @@ model NewsletterSubscriber {
 model OmnipostProcessedKey {
   id        String   @id @default(auto()) @map("_id") @db.ObjectId
   key       String   @unique
+  createdAt DateTime @default(now())
+}
+
+// ── Centralized serving areas (pincode coverage per city, admin-managed) ──
+model ServingArea {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  city      String   @unique
+  state     String
+  lat       Float    @default(26.8467)
+  lng       Float    @default(80.9462)
+  isActive  Boolean  @default(true)
+  pincodes  String[] @default([])
   createdAt DateTime @default(now())
 }

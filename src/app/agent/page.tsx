@@ -7,7 +7,7 @@ import { useRouter } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import {
   LayoutDashboard, Store, LogOut, ShieldCheck, MapPin, ChevronRight,
-  X, ArrowUpRight, Plus, Bell, Check, TrendingUp, Briefcase, IndianRupee, Search, UserCheck, MapPinned,
+  X, ArrowUpRight, Bell, Check, TrendingUp, Briefcase, IndianRupee, Search, UserCheck, MapPinned,
 } from "lucide-react";
 import { trpc } from "~/trpc/react";
 
@@ -26,8 +26,8 @@ export default function AgentPage() {
   const agentId = sUser?.id ?? "";
 
   const [tab, setTab] = useState<Tab>("overview");
-  const [pinInput, setPinInput] = useState("");
   const [pinErr, setPinErr] = useState("");
+  const [street, setStreet] = useState("");
   const [search, setSearch] = useState("");
   const [loggingOut, setLoggingOut] = useState<"confirm" | "signedout" | null>(null);
 
@@ -35,6 +35,7 @@ export default function AgentPage() {
   const statsQ = trpc.agents.areaStats.useQuery(undefined, { enabled: !!agentId && status === "authenticated" });
   const vendorsQ = trpc.agents.areaVendors.useQuery(undefined, { enabled: !!agentId && status === "authenticated" });
   const setArea = trpc.agents.setServiceArea.useMutation({ onSuccess: () => areaQ.refetch() });
+  const setAddress = trpc.areas.setAddress.useMutation({ onSuccess: () => { areaQ.refetch(); setStreet(""); } });
   const notifQ = trpc.admin.notifications.useQuery({ limit: 10 }, { enabled: !!agentId && status === "authenticated" });
   const markRead = trpc.admin.markNotificationRead.useMutation({ onSuccess: () => notifQ.refetch() });
   const [notifOpen, setNotifOpen] = useState(false);
@@ -53,7 +54,10 @@ export default function AgentPage() {
       </div>
     );
 
-  const area = areaQ.data as { city?: string; pincodes?: string[]; commissionPercent?: number; fullName?: string; isVerified?: boolean } | undefined;
+  const area = areaQ.data as { city?: string; pincodes?: string[]; streetAddress?: string | null; commissionPercent?: number; fullName?: string; isVerified?: boolean } | undefined;
+  const servingQ = trpc.areas.byCity.useQuery({ city: area?.city ?? "" }, { enabled: !!area?.city && !!area?.streetAddress });
+  const serving = servingQ.data as { city?: string; pincodes?: string[]; isActive?: boolean } | null | undefined;
+  const canPickArea = !!area?.streetAddress;
   const stats = statsQ.data as { areaVendors?: number; approvedVendors?: number; pendingKyc?: number; areaBookings?: number; commissionPercent?: number } | undefined;
   const vendors = useMemo(() => {
     const list = ((vendorsQ.data as { vendors?: AreaVendor[] } | undefined)?.vendors ?? []);
@@ -250,34 +254,53 @@ export default function AgentPage() {
               <div className="card">
                 <p className="font-extrabold text-ink">Your assigned area</p>
                 <p className="sub mb-3">City: <b className="text-ink">{area?.city ?? "—"}</b> • commission <b className="text-success">{area?.commissionPercent ?? 5}%</b></p>
-                <p className="mb-2 text-xs font-extrabold uppercase tracking-wider text-muted">Pincodes you own</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {pincodes.map((p) => (
-                    <span key={p} className="inline-flex items-center gap-1 rounded-full border border-primary-200 bg-primary-50 px-2.5 py-1 text-xs font-bold text-primary-700">
-                      {p}
-                      <button type="button" onClick={() => setArea.mutate({ pincodes: pincodes.filter((x) => x !== p) })} className="text-primary-400 hover:text-danger">✕</button>
-                    </span>
-                  ))}
-                  {pincodes.length === 0 ? <p className="text-xs text-muted">No pincodes yet.</p> : null}
-                </div>
-                <div className="mt-3 flex gap-2">
-                  <input value={pinInput} onChange={(e) => setPinInput(e.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" placeholder="6-digit pincode" className="input !py-2" />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!/^\d{6}$/.test(pinInput)) { setPinErr("Enter a valid 6-digit pincode."); return; }
-                      setPinErr("");
-                      setArea.mutate({ pincodes: [...pincodes, pinInput] });
-                      setPinInput("");
-                    }}
-                    disabled={setArea.isPending}
-                    className="btn-primary shrink-0 !py-2"
-                  >
-                    <Plus size={14} /> Add
-                  </button>
-                </div>
-                {pinErr !== "" ? <p className="mt-1 text-xs font-semibold text-danger">{pinErr}</p> : null}
-                <p className="mt-3 text-xs font-medium text-muted">Vendors serving these pincodes automatically appear in your area and are monitored by you.</p>
+
+                {!canPickArea ? (
+                  <>
+                    <p className="rounded-xl bg-accent-50 px-3.5 py-2.5 text-[13px] font-semibold text-accent-600">
+                      You don&apos;t have a service address yet — set your street/city first, then pick the pincodes you own.
+                    </p>
+                    <div className="mt-3 flex flex-col gap-2">
+                      <input value={street} onChange={(e) => setStreet(e.target.value)} placeholder={`Street / colony — e.g. MG Road, ${area?.city ?? ""}`} className="input !py-2.5" />
+                      <button
+                        type="button"
+                        onClick={() => { if (street.trim().length < 3) { setPinErr("Enter a valid street address."); return; } setPinErr(""); setAddress.mutate({ streetAddress: street.trim() }); }}
+                        disabled={setAddress.isPending}
+                        className="btn-accent !py-2.5"
+                      >
+                        <MapPin size={15} /> Save my service address
+                      </button>
+                      {pinErr !== "" ? <p className="text-xs font-semibold text-danger">{pinErr}</p> : null}
+                    </div>
+                  </>
+                ) : serving?.isActive === false || !serving ? (
+                  <p className="rounded-xl bg-accent-50 px-3.5 py-2.5 text-[13px] font-semibold text-accent-600">
+                    We don&apos;t serve <b className="text-ink">{area?.city}</b> yet. Ask the admin to add it to serving areas.
+                  </p>
+                ) : (
+                  <>
+                    <p className="mb-2 text-xs font-bold text-body">Your address: <span className="text-ink">{area?.streetAddress}</span></p>
+                    <p className="mb-2 text-xs font-extrabold uppercase tracking-wider text-muted">Serving pincodes you own in {serving.city}</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {(serving.pincodes ?? []).map((p) => {
+                        const sel = pincodes.includes(p);
+                        return (
+                          <button
+                            key={p}
+                            type="button"
+                            onClick={() => setArea.mutate({ pincodes: sel ? pincodes.filter((x) => x !== p) : [...pincodes, p] })}
+                            disabled={setArea.isPending}
+                            className={`rounded-full border px-3 py-1.5 text-xs font-bold transition-all ${sel ? "border-primary-600 bg-primary-600 text-white shadow-sm" : "border-line bg-white text-body hover:border-primary-300 hover:text-primary-700"}`}
+                          >
+                            {p}
+                          </button>
+                        );
+                      })}
+                      {!serving.pincodes?.length ? <p className="text-xs text-muted">No pincodes configured for this city yet.</p> : null}
+                    </div>
+                    <p className="mt-2 text-[11px] font-medium text-muted">Vendors serving the pincodes you own appear in your area and are monitored by you.</p>
+                  </>
+                )}
               </div>
               <div className="card">
                 <p className="font-extrabold text-ink">How area monitoring works</p>

@@ -18,6 +18,7 @@ export const agentsRouter = createTRPCRouter({
     return {
       city: user.agentProfile.assignedCity,
       pincodes: user.agentProfile.serviceAreaPincodes ?? [],
+      streetAddress: user.agentProfile.streetAddress ?? null,
       commissionPercent: user.agentProfile.commissionPercent,
       fullName: user.fullName,
       isVerified: user.isVerified,
