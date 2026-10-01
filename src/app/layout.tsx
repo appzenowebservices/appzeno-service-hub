@@ -8,7 +8,7 @@ import { SessionProvider } from 'next-auth/react';
 import { NextSSRPlugin } from "@uploadthing/react/next-ssr-plugin";
 import { extractRouterConfig } from "uploadthing/server";
 import { ourFileRouter } from "./uploadthing";
-// import FcmBootstrap from "~/app/components/FcmBootstrap";
+import FcmBootstrap from "~/app/components/FcmBootstrap";
 
 
 export const metadata: Metadata = {
@@ -95,6 +95,7 @@ export default function RootLayout({
         <SessionProvider >
           <TRPCReactProvider>
             {children}
+            <FcmBootstrap />
           </TRPCReactProvider>
         </SessionProvider>
       </body>

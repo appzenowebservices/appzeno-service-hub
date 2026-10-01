@@ -61,6 +61,8 @@ model User {
   isActive          Boolean   @default(true)
   createdAt         DateTime  @default(now())
   passwordHash      String?
+  // FCM registration tokens for web push (one per browser/device)
+  fcmTokens         String[]  @default([])
 
   customerProfile   CustomerProfile?
   vendorProfile     VendorProfile?

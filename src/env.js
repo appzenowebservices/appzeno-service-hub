@@ -18,6 +18,10 @@ export const env = createEnv({
     OMNIPOST_CUSTOMER_LIST_UUIDS: z.string().optional(),
     RAZORPAY_KEY_ID: z.string().optional(),
     RAZORPAY_KEY_SECRET: z.string().optional(),
+    // Firebase Admin (FCM web push). SERVICE_ACCOUNT_KEY = base64 of the
+    // service-account JSON (or the raw JSON / a path to it as fallback).
+    FIREBASE_PROJECT_ID: z.string().optional(),
+    FIREBASE_SERVICE_ACCOUNT_KEY: z.string().optional(),
     // AUTH_DISCORD_ID: isProd ? z.string() : z.string().optional(),
     // AUTH_DISCORD_SECRET: isProd ? z.string() : z.string().optional(),
     DATABASE_URL: isProd ? z.string().url() : z.string().url().optional(),
@@ -31,6 +35,12 @@ export const env = createEnv({
    */
   client: {
     NEXT_PUBLIC_FIREBASE_VAPID_KEY: z.string().optional(),
+    NEXT_PUBLIC_FIREBASE_API_KEY: z.string().optional(),
+    NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: z.string().optional(),
+    NEXT_PUBLIC_FIREBASE_PROJECT_ID: z.string().optional(),
+    NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: z.string().optional(),
+    NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: z.string().optional(),
+    NEXT_PUBLIC_FIREBASE_APP_ID: z.string().optional(),
     NEXT_PUBLIC_RAZORPAY_KEY_ID: z.string().optional(),
   },
 
@@ -48,12 +58,20 @@ export const env = createEnv({
     OMNIPOST_CUSTOMER_LIST_UUIDS: process.env.OMNIPOST_CUSTOMER_LIST_UUIDS,
     RAZORPAY_KEY_ID: process.env.RAZORPAY_KEY_ID,
     RAZORPAY_KEY_SECRET: process.env.RAZORPAY_KEY_SECRET,
+    FIREBASE_PROJECT_ID: process.env.FIREBASE_PROJECT_ID,
+    FIREBASE_SERVICE_ACCOUNT_KEY: process.env.FIREBASE_SERVICE_ACCOUNT_KEY,
     // AUTH_DISCORD_ID: process.env.AUTH_DISCORD_ID,
     // AUTH_DISCORD_SECRET: process.env.AUTH_DISCORD_SECRET,
     DATABASE_URL: process.env.DATABASE_URL,
     MONGODB_URI: process.env.MONGODB_URI,
     NODE_ENV: process.env.NODE_ENV,
     NEXT_PUBLIC_FIREBASE_VAPID_KEY: process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY,
+    NEXT_PUBLIC_FIREBASE_API_KEY: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+    NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+    NEXT_PUBLIC_FIREBASE_PROJECT_ID: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+    NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+    NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+    NEXT_PUBLIC_FIREBASE_APP_ID: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
     NEXT_PUBLIC_RAZORPAY_KEY_ID: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
   },
   /**

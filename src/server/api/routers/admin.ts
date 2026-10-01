@@ -1,6 +1,7 @@
 import { createTRPCRouter, adminProcedure, protectedProcedure } from "~/server/api/trpc";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
+import { sendPushToUsers } from "~/server/notifications/notify";
 
 const CATALOG: { slug: string; name: string; icon: string; description: string; commissionPercent: number; rating: number; totalBookings: number; sortOrder: number; image?: string; featured?: boolean; subs: { name: string; basePrice: number; unit: string }[] }[] = [
   { slug: "home-cleaning", name: "Home Cleaning", icon: "🧹", description: "Kitchen, sofa, full-home packages", commissionPercent: 15, rating: 4.82, totalBookings: 12400, sortOrder: 1, image: "/images/hero/home-cleaning.png", featured: true, subs: [{ name: "1BHK deep cleaning", basePrice: 1999, unit: "per home" }, { name: "2BHK deep cleaning", basePrice: 2999, unit: "per home" }, { name: "Sofa + carpet shampoo", basePrice: 899, unit: "per set" }] },
@@ -286,6 +287,8 @@ export const adminRouter = createTRPCRouter({
           message: input.message,
         })),
       });
+      // Fan the same message out as device push notifications.
+      await sendPushToUsers(ctx.db, users.map((u) => u.id), { title: input.title, body: input.message, url: "/" });
       return { sent: users.length };
     }),
 });

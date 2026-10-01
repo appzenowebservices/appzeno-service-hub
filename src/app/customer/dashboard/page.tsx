@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -8,9 +8,10 @@ import { useSession, signOut } from "next-auth/react";
 import {
   LayoutDashboard, CalendarClock, Wallet, Bell, BellOff, LogOut, ChevronRight, X, Check,
   Star, TrendingUp, CheckCircle2, Plus, ArrowRight, Sparkles, CheckCheck,
-  CalendarCheck, CreditCard, Gift, Info, Phone, Loader2, XCircle, RotateCcw,
+  CalendarCheck, CreditCard, Gift, Info, Phone, Loader2, XCircle, RotateCcw, AlertTriangle,
 } from "lucide-react";
 import { trpc } from "~/trpc/react";
+import BrandedLoader from "~/app/components/common/BrandedLoader";
 
 type Tab = "overview" | "bookings" | "notifications";
 
@@ -99,11 +100,32 @@ export default function CustomerDashboard() {
   const router = useRouter();
   const sUser = session?.user;
   const customerId = sUser?.id ?? "";
+  const role = ((sUser as { role?: string } | undefined)?.role ?? "").toUpperCase();
+
+  // Env superadmin has no DB row — send it to the ops console instead of
+  // firing customer-only queries with a non-ObjectId.
+  useEffect(() => {
+    if (status === "authenticated" && role === "ADMIN") router.replace("/admin");
+  }, [status, role, router]);
 
   const [tab, setTab] = useState<Tab>("overview");
   const [loggingOut, setLoggingOut] = useState<"confirm" | "signedout" | null>(null);
   const [notifOpen, setNotifOpen] = useState(false);
   const [notifTab, setNotifTab] = useState<"all" | "unread">("all");
+  const [pushPerm, setPushPerm] = useState<NotificationPermission | "unsupported">("default");
+
+  // Track browser notification permission so the bell can warn when it's off.
+  useEffect(() => {
+    if (typeof window === "undefined" || !("Notification" in window)) { setPushPerm("unsupported"); return; }
+    const update = () => setPushPerm(Notification.permission);
+    update();
+    window.addEventListener("focus", update);
+    document.addEventListener("visibilitychange", update);
+    return () => {
+      window.removeEventListener("focus", update);
+      document.removeEventListener("visibilitychange", update);
+    };
+  }, []);
 
   const meQ = trpc.users.getById.useQuery({ id: customerId }, { enabled: !!customerId && status === "authenticated" });
   const bookingsQ = trpc.bookings.getByCustomer.useQuery({ customerId, limit: 50 }, { enabled: !!customerId });
@@ -168,7 +190,7 @@ export default function CustomerDashboard() {
     window.setTimeout(() => { void signOut({ callbackUrl: "/" }); }, 1200);
   };
 
-  if (status === "loading") return <div className="p-10 text-muted">Loading…</div>;
+  if (status === "loading") return <BrandedLoader />;
   if (status !== "authenticated") {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-surface">
@@ -177,6 +199,7 @@ export default function CustomerDashboard() {
       </div>
     );
   }
+  if (role === "ADMIN") return <BrandedLoader label="Redirecting to admin console…" />;
 
   const NAV: { key: Tab; label: string; Icon: typeof LayoutDashboard; badge?: number }[] = [
     { key: "overview", label: "Overview", Icon: LayoutDashboard },
@@ -231,7 +254,11 @@ export default function CustomerDashboard() {
             <Link href="/customer/booking" className="btn-primary !py-2 !text-[13px]"><Plus size={15} /> Book service</Link>
             <button onClick={() => setNotifOpen((o) => !o)} aria-label="Notifications" className="relative rounded-full border border-line bg-white p-2.5 text-body shadow-sm hover:border-primary-300 hover:text-primary-700">
               <Bell size={18} />
-              {unreadCount > 0 ? <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-danger text-[9px] font-extrabold text-white">{unreadCount}</span> : null}
+              {unreadCount > 0 ? (
+                <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-danger text-[9px] font-extrabold text-white">{unreadCount}</span>
+              ) : pushPerm !== "granted" && pushPerm !== "unsupported" ? (
+                <span title="Notifications are off" className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-danger text-white"><AlertTriangle size={9} /></span>
+              ) : null}
             </button>
           </div>
         </header>
@@ -243,7 +270,11 @@ export default function CustomerDashboard() {
             <p className="truncate text-sm font-extrabold text-ink">Namaste, {me?.fullName?.split(" ")[0] ?? "there"}</p>
             <button onClick={() => setNotifOpen((o) => !o)} className="relative ml-auto rounded-full p-2 text-muted hover:bg-surface hover:text-ink">
               <Bell size={18} />
-              {unreadCount > 0 ? <span className="absolute right-1 top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-danger text-[8px] font-extrabold text-white">{unreadCount}</span> : null}
+              {unreadCount > 0 ? (
+                <span className="absolute right-1 top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-danger text-[8px] font-extrabold text-white">{unreadCount}</span>
+              ) : pushPerm !== "granted" && pushPerm !== "unsupported" ? (
+                <span title="Notifications are off" className="absolute right-1 top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-danger text-white"><AlertTriangle size={8} /></span>
+              ) : null}
             </button>
             <button onClick={() => setLoggingOut("confirm")} className="rounded-full px-3 py-1.5 text-xs font-bold text-danger hover:bg-danger-soft">Logout</button>
           </div>

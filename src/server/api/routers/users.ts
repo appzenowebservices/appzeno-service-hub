@@ -1,10 +1,13 @@
 import { createTRPCRouter, publicProcedure, protectedProcedure, adminProcedure } from "~/server/api/trpc";
 import { z } from "zod";
+import { isObjectId } from "~/server/utils/object-id";
 
 export const usersRouter = createTRPCRouter({
   getById: protectedProcedure
     .input(z.object({ id: z.string() }))
     .query(async ({ ctx, input }) => {
+      // Env superadmin (and other non-DB sessions) have non-ObjectId ids.
+      if (!isObjectId(input.id)) return null;
       return ctx.db.user.findUnique({
         where: { id: input.id },
         include: {
@@ -18,11 +21,53 @@ export const usersRouter = createTRPCRouter({
 
   me: protectedProcedure.query(async ({ ctx }) => {
     const id = (ctx.session.user as { id: string }).id;
+    if (!isObjectId(id)) return null;
     return ctx.db.user.findUnique({
       where: { id },
       include: { customerProfile: true, vendorProfile: true, agentProfile: true, Address: true },
     });
   }),
+
+  /** Registers (or refreshes) this browser's FCM token for web push. */
+  registerFcmToken: protectedProcedure
+    .input(z.object({ token: z.string().min(20) }))
+    .mutation(async ({ ctx, input }) => {
+      const id = (ctx.session.user as { id: string }).id;
+      if (!isObjectId(id)) {
+        console.warn(`[fcm] register skipped — session ${id} has no DB user (env superadmin?)`);
+        return { ok: false, reason: "no-db-user" };
+      }
+      const user = await ctx.db.user.findUnique({ where: { id }, select: { fcmTokens: true } });
+      if (!user) {
+        console.warn(`[fcm] register skipped — no user row for ${id}`);
+        return { ok: false, reason: "no-db-user" };
+      }
+      const existing = user.fcmTokens ?? [];
+      if (existing.includes(input.token)) {
+        console.log(`[fcm] token already registered for ${id} (${existing.length} device(s))`);
+        return { ok: true, already: true };
+      }
+      await ctx.db.user.update({
+        where: { id },
+        data: { fcmTokens: { push: input.token } },
+      });
+      console.log(`[fcm] token registered for ${id} — ${existing.length + 1} device(s)`);
+      return { ok: true };
+    }),
+
+  /** Removes this browser's FCM token (called on logout / push opt-out). */
+  removeFcmToken: protectedProcedure
+    .input(z.object({ token: z.string().min(20) }))
+    .mutation(async ({ ctx, input }) => {
+      const id = (ctx.session.user as { id: string }).id;
+      const user = await ctx.db.user.findUnique({ where: { id }, select: { fcmTokens: true } });
+      const tokens = user?.fcmTokens ?? [];
+      await ctx.db.user.update({
+        where: { id },
+        data: { fcmTokens: { set: tokens.filter((t) => t !== input.token) } },
+      });
+      return { ok: true };
+    }),
 
   getByMobile: publicProcedure
     .input(z.object({ mobile: z.string() }))

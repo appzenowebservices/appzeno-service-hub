@@ -1,5 +1,8 @@
 import { createTRPCRouter, protectedProcedure, adminProcedure } from "~/server/api/trpc";
 import { z } from "zod";
+import { notifyUser } from "~/server/notifications/notify";
+import { isObjectId } from "~/server/utils/object-id";
+import { TRPCError } from "@trpc/server";
 
 const statusEnum = z.enum(["PENDING", "ASSIGNED", "ACCEPTED", "IN_PROGRESS", "COMPLETED", "CANCELLED", "DISPUTED"]);
 
@@ -35,21 +38,22 @@ export const bookingsRouter = createTRPCRouter({
     )
     .mutation(async ({ ctx, input }) => {
       const customerId = (ctx.session.user as { id: string }).id;
+      if (!isObjectId(customerId)) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Only customer accounts can place bookings." });
+      }
       const booking = await ctx.db.booking.create({
         data: {
           customerId,
           ...input,
         },
       });
-      // notify + wallet placeholder
-      await ctx.db.notification.create({
-        data: {
-          userId: customerId,
-          type: "booking",
-          title: "Booking created",
-          message: `Your booking ${booking.id.slice(-6)} has been placed`,
-          actionUrl: `/customer/bookings/${booking.id}`,
-        },
+      // notify customer (in-app + web push)
+      await notifyUser(ctx.db, {
+        userId: customerId,
+        type: "booking",
+        title: "Booking created",
+        message: `Your booking ${booking.id.slice(-6)} has been placed`,
+        actionUrl: "/customer/dashboard",
       });
       return booking;
     }),
@@ -66,6 +70,7 @@ export const bookingsRouter = createTRPCRouter({
   getByCustomer: protectedProcedure
     .input(z.object({ customerId: z.string(), limit: z.number().min(1).max(100).default(10), status: statusEnum.optional() }))
     .query(async ({ ctx, input }) => {
+      if (!isObjectId(input.customerId)) return [];
       return ctx.db.booking.findMany({
         where: { customerId: input.customerId, ...(input.status ? { status: input.status } : {}) },
         take: input.limit,
@@ -77,6 +82,7 @@ export const bookingsRouter = createTRPCRouter({
   getByVendor: protectedProcedure
     .input(z.object({ vendorId: z.string(), limit: z.number().default(20), status: statusEnum.optional() }))
     .query(async ({ ctx, input }) => {
+      if (!isObjectId(input.vendorId)) return [];
       return ctx.db.booking.findMany({
         where: { vendorId: input.vendorId, ...(input.status ? { status: input.status } : {}) },
         take: input.limit,
@@ -140,14 +146,12 @@ export const bookingsRouter = createTRPCRouter({
           status: "pending",
         },
       });
-      await ctx.db.notification.create({
-        data: {
-          userId: input.vendorId,
-          type: "lead",
-          title: "New lead assigned",
-          message: `New booking ${input.id.slice(-6)} assigned to you`,
-          actionUrl: `/vendor/leads`,
-        },
+      await notifyUser(ctx.db, {
+        userId: input.vendorId,
+        type: "lead",
+        title: "New lead assigned",
+        message: `New booking ${input.id.slice(-6)} assigned to you`,
+        actionUrl: "/vendor",
       });
       return booking;
     }),

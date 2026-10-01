@@ -10,6 +10,7 @@ import {
   X, ArrowUpRight, Bell, Check, TrendingUp, Briefcase, IndianRupee, Search, UserCheck, MapPinned,
 } from "lucide-react";
 import { trpc } from "~/trpc/react";
+import BrandedLoader from "~/app/components/common/BrandedLoader";
 
 type Tab = "overview" | "vendors" | "area";
 
@@ -45,7 +46,7 @@ export default function AgentPage() {
     window.setTimeout(() => signOut({ callbackUrl: "/" }), 1200);
   };
 
-  if (status === "loading") return <div className="p-10 text-muted">Loading…</div>;
+  if (status === "loading") return <BrandedLoader />;
   if (status !== "authenticated" || (role !== "AGENT" && role !== "ADMIN"))
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-surface">

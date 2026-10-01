@@ -1,6 +1,7 @@
 import { createTRPCRouter, publicProcedure, protectedProcedure, adminProcedure } from "~/server/api/trpc";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
+import { notifyUser } from "~/server/notifications/notify";
 
 export const vendorsRouter = createTRPCRouter({
   getPublicProfile: publicProcedure
@@ -111,17 +112,15 @@ export const vendorsRouter = createTRPCRouter({
           kycStatus: input.approved ? "APPROVED" : "REJECTED",
         },
       });
-      // Notify the vendor of the decision (surfaces in their notification bell).
-      await ctx.db.notification.create({
-        data: {
-          userId: user.id,
-          type: "kyc",
-          title: input.approved ? "KYC approved 🎉" : "KYC not approved",
-          message: input.approved
-            ? "Congratulations! Your KYC is approved — you can now receive leads."
-            : "Your KYC was not approved. Please review your documents and resubmit.",
-          actionUrl: "/vendor",
-        },
+      // Notify the vendor of the decision (in-app bell + web push).
+      await notifyUser(ctx.db, {
+        userId: user.id,
+        type: "kyc",
+        title: input.approved ? "KYC approved 🎉" : "KYC not approved",
+        message: input.approved
+          ? "Congratulations! Your KYC is approved — you can now receive leads."
+          : "Your KYC was not approved. Please review your documents and resubmit.",
+        actionUrl: "/vendor",
       });
       return ctx.db.user.findUnique({ where: { id: input.id }, include: { vendorProfile: true } });
     }),
@@ -257,15 +256,13 @@ export const vendorsRouter = createTRPCRouter({
         throw new TRPCError({ code: "BAD_REQUEST", message: "Nothing missing — KYC is complete" });
       }
 
-      // Store a notification for the vendor (surfaces in their bell / dashboard).
-      await ctx.db.notification.create({
-        data: {
-          userId: user.id,
-          type: "kyc",
-          title: "KYC reminder — items missing",
-          message: `Please complete your KYC: ${missing.join(", ")}.`,
-          actionUrl: "/vendor",
-        },
+      // Notify the vendor (bell + web push) about what's still missing.
+      await notifyUser(ctx.db, {
+        userId: user.id,
+        type: "kyc",
+        title: "KYC reminder — items missing",
+        message: `Please complete your KYC: ${missing.join(", ")}.`,
+        actionUrl: "/vendor",
       });
 
       return { missing, sent: true };

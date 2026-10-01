@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { CheckCircle2, Loader2, Calendar, MapPin, AlertCircle, ArrowLeft, Wrench, Home, Check } from "lucide-react";
 import { trpc } from "~/trpc/react";
+import BrandedLoader from "~/app/components/common/BrandedLoader";
 import RazorpayCheckout from "./RazorpayCheckout";
 import BookingMapPicker, { type MapAddress } from "./BookingMapPicker";
 
@@ -25,6 +26,12 @@ export default function CustomerBookingPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
   const mobile = session?.user?.mobile ?? "";
+  const role = (((session?.user as { role?: string } | undefined)?.role) ?? "").toUpperCase();
+
+  // Admins (incl. env superadmin) can't book — send them to the ops console.
+  useEffect(() => {
+    if (status === "authenticated" && role === "ADMIN") router.replace("/admin");
+  }, [status, role, router]);
 
   const [catId, setCatId] = useState("");
   const [subId, setSubId] = useState("");
@@ -99,7 +106,7 @@ export default function CustomerBookingPage() {
     });
   };
 
-  if (status === "loading") return <div className="p-10 text-muted">Loading…</div>;
+  if (status === "loading") return <BrandedLoader />;
   if (status !== "authenticated") {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-surface">
@@ -108,6 +115,7 @@ export default function CustomerBookingPage() {
       </div>
     );
   }
+  if (role === "ADMIN") return <BrandedLoader label="Redirecting to admin console…" />;
 
   if (createdId) {
     return (

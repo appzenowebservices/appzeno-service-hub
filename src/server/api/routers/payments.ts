@@ -3,6 +3,7 @@ import Razorpay from "razorpay";
 import { createTRPCRouter, protectedProcedure } from "~/server/api/trpc";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
+import { notifyUser } from "~/server/notifications/notify";
 
 // Server-only: the secret never leaves the server. key_id may be shared for checkout.
 const keyId = process.env.RAZORPAY_KEY_ID ?? "";
@@ -67,14 +68,12 @@ export const paymentsRouter = createTRPCRouter({
         where: { id: input.bookingId },
         data: { paymentStatus: "PAID", razorpayPaymentId: input.razorpayPaymentId },
       });
-      await ctx.db.notification.create({
-        data: {
-          userId,
-          type: "payment",
-          title: "Payment received",
-          message: `Your payment for booking #${input.bookingId.slice(-6)} is confirmed.`,
-          actionUrl: `/customer/bookings/${input.bookingId}`,
-        },
+      await notifyUser(ctx.db, {
+        userId,
+        type: "payment",
+        title: "Payment received",
+        message: `Your payment for booking #${input.bookingId.slice(-6)} is confirmed.`,
+        actionUrl: "/customer/dashboard",
       });
       return { ok: true, paymentId: input.razorpayPaymentId };
     }),

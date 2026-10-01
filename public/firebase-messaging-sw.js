@@ -1,30 +1,35 @@
 // /public/firebase-messaging-sw.js
+// NOTE: values here are the public Web-App config (safe to expose).
+// They must belong to the same Firebase project as the NEXT_PUBLIC_FIREBASE_* env vars.
 
 importScripts("https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js");
 importScripts("https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js");
 
 firebase.initializeApp({
-  apiKey: "AIzaSyCO7PQPGFi5K9Zk2CxagmvTXZzwNPk_Ag8",
-  authDomain: "apni-desi-dukaan.firebaseapp.com",
-  projectId: "apni-desi-dukaan",
-  storageBucket: "apni-desi-dukaan.firebasestorage.app",
-  messagingSenderId: "6007497115",
-  appId: "1:6007497115:web:0dd75c47b96fad0248013e",
-  measurementId: "G-N1DYCXV0PD"
+  apiKey: "AIzaSyA5I4jP9syPQ5-hTyEcgPxjdCiKq13kvos",
+  authDomain: "service-hub-df5e3.firebaseapp.com",
+  projectId: "service-hub-df5e3",
+  storageBucket: "service-hub-df5e3.firebasestorage.app",
+  messagingSenderId: "990502707671",
+  appId: "1:990502707671:web:eb5934cdb81d4b3fe76b92",
+  measurementId: "G-KKL8KGQWH6",
 });
 
 // Background notifications
 const messaging = firebase.messaging();
 
 messaging.onBackgroundMessage((payload) => {
-  const title = payload?.notification?.title || "New Notification";
-  const body = payload?.notification?.body || "";
-  const icon = payload?.notification?.icon || "/icons/icon-512x512.png";
-  const url = payload?.fcmOptions?.link || payload?.data?.url || "/";
+  const data = payload?.data || {};
+  const note = payload?.notification || {};
+  const title = note.title || data.title || "ADDies";
+  const body = note.body || data.body || "";
+  const icon = note.icon || "/icons/icon-192.png";
+  const url = data.url || payload?.fcmOptions?.link || "/";
 
   self.registration.showNotification(title, {
     body,
     icon,
+    badge: "/icons/icon-192.png",
     data: { url },
   });
 });

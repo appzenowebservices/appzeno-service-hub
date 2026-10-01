@@ -11,6 +11,7 @@ import {
   X, ArrowUpRight, Building2, Store, Award, Bell, BellOff, CheckCheck, Check, MapPin,
 } from "lucide-react";
 import { trpc } from "~/trpc/react";
+import BrandedLoader from "~/app/components/common/BrandedLoader";
 import { generateReactHelpers } from "@uploadthing/react";
 import type { OurFileRouter } from "~/app/uploadthing";
 
@@ -180,7 +181,7 @@ export default function VendorDashboard() {
     window.setTimeout(() => signOut({ callbackUrl: "/" }), 1200);
   };
 
-  if (status === "loading") return <div className="p-10 text-muted">Loading dashboard…</div>;
+  if (status === "loading") return <BrandedLoader />;
   if (status !== "authenticated" || (role !== "VENDOR" && role !== "ADMIN")) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-surface">
