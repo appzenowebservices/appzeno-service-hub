@@ -4,9 +4,10 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { CheckCircle2, Loader2, Calendar, MapPin, Tag, AlertCircle, ArrowLeft, Wrench } from "lucide-react";
+import { CheckCircle2, Loader2, Calendar, MapPin, AlertCircle, ArrowLeft, Wrench, Home, Check } from "lucide-react";
 import { trpc } from "~/trpc/react";
 import RazorpayCheckout from "./RazorpayCheckout";
+import BookingMapPicker, { type MapAddress } from "./BookingMapPicker";
 
 const SLOTS = [
   { id: "m1", label: "9:00 AM – 12:00 PM", start: "09:00", end: "12:00" },
@@ -39,6 +40,14 @@ export default function CustomerBookingPage() {
   const [err, setErr] = useState("");
   const [createdId, setCreatedId] = useState("");
   const [paidOnline, setPaidOnline] = useState(false);
+  const [locPicked, setLocPicked] = useState(false);
+
+  const onMapAddress = (a: MapAddress) => {
+    setArea(a.area);
+    if (a.pincode) setPincode(a.pincode);
+    if (a.city) setCity(a.city);
+    setLocPicked(true);
+  };
 
   const catsQ = trpc.categories.getAll.useQuery(undefined, { enabled: status === "authenticated" });
   const create = trpc.bookings.create.useMutation({
@@ -54,13 +63,23 @@ export default function CustomerBookingPage() {
   const totalAmount = baseAmount + surgeAmount + visitingCharge;
   const slot = SLOTS.find((s) => s.id === slotId) ?? null;
 
-  const canSubmit = catId && subId && desc.trim().length >= 5 && houseNo.trim() && area.trim() && /^\d{6}$/.test(pincode) && city.trim() && date && slot && payment;
+  const missing: string[] = [];
+  if (!catId) missing.push("service category");
+  if (!subId) missing.push("exact service");
+  if (desc.trim().length < 5) missing.push("issue description (min 5 chars)");
+  if (!houseNo.trim()) missing.push("house / flat no.");
+  if (!area.trim()) missing.push("area / locality");
+  if (!/^\d{6}$/.test(pincode)) missing.push("6-digit pincode");
+  if (!city.trim()) missing.push("city");
+  if (!date) missing.push("preferred date");
+  if (!slot) missing.push("time slot");
+  const canSubmit = missing.length === 0;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setErr("");
     if (!canSubmit || !cat || !sub || !slot) {
-      setErr("Please fill all required fields.");
+      setErr("Please complete: " + (missing.join(", ") || "all required fields."));
       return;
     }
     create.mutate({
@@ -123,91 +142,149 @@ export default function CustomerBookingPage() {
         <div className="page-container flex h-16 items-center justify-between">
           <Link href="/customer/dashboard" className="flex items-center gap-2 text-sm font-bold text-body hover:text-primary-700"><ArrowLeft size={16} /> Back to dashboard</Link>
           <p className="text-sm font-extrabold text-ink">Book a service</p>
-          <span className="chip chip-primary">Customer</span>
+          <span className="chip chip-primary">Fixed pricing</span>
         </div>
       </header>
 
-      <main className="page-container mx-auto max-w-2xl py-6">
+      <main className="page-container mx-auto max-w-6xl py-6">
         <p className="eyebrow">Upfront pricing • Verified pros</p>
         <h1 className="h-section mt-2 !text-2xl">What do you need done?</h1>
-        <p className="sub mb-5 mt-1">Fixed price shown before you confirm — no surprises at the door.</p>
+        <p className="sub mb-5 mt-1">Fixed price shown live on the right — no surprises at the door.</p>
 
-        <form onSubmit={handleSubmit} className="card space-y-4 !p-5">
-          {/* service */}
-          <div>
-            <label className="mb-1 flex items-center gap-1.5 text-[13px] font-extrabold text-ink"><Wrench size={14} className="text-primary-600" /> Service</label>
-            <select value={catId} onChange={(e) => { setCatId(e.target.value); setSubId(""); }} className="input mb-2" required>
-              <option value="">Select category…</option>
-              {cats.map((c) => <option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}
-            </select>
-            {cat ? (
-              <select value={subId} onChange={(e) => setSubId(e.target.value)} className="input" required>
-                <option value="">Select exact service…</option>
-                {cat.subCategories.map((s) => <option key={s.id} value={s.id}>{s.name} — ₹{s.basePrice} ({s.unit})</option>)}
-              </select>
-            ) : null}
-          </div>
+        <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
+          {/* ── left: form sections ── */}
+          <form id="booking-form" onSubmit={handleSubmit} className="space-y-4">
+            {/* 1 · service */}
+            <section className="card">
+              <p className="mb-3 flex items-center gap-2 text-sm font-extrabold text-ink"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary-600 text-[11px] text-white">1</span><Wrench size={15} className="text-primary-600" /> Choose your service</p>
 
-          {/* description */}
-          <div>
-            <label className="mb-1 block text-[13px] font-extrabold text-ink">Describe the issue</label>
-            <textarea value={desc} onChange={(e) => setDesc(e.target.value)} rows={3} placeholder="e.g. Bathroom tap is leaking, need it fixed today…" className="input" required />
-          </div>
+              {cats.length === 0 ? (
+                <p className="rounded-xl bg-surface px-3 py-4 text-center text-xs font-semibold text-muted">Services launching soon.</p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {cats.map((c) => (
+                    <button key={c.id} type="button" onClick={() => { setCatId(c.id); setSubId(""); }} className={`flex items-center gap-1.5 rounded-full border px-3.5 py-2 text-[13px] font-bold transition-all ${catId === c.id ? "border-primary-600 bg-primary-600 text-white shadow-sm" : "border-line bg-white text-body hover:border-primary-300 hover:bg-primary-50"}`}>
+                      <span className="text-base leading-none">{c.icon === "" ? "✨" : c.icon}</span>
+                      {c.name}
+                    </button>
+                  ))}
+                </div>
+              )}
 
-          {/* address */}
-          <div>
-            <label className="mb-1 flex items-center gap-1.5 text-[13px] font-extrabold text-ink"><MapPin size={14} className="text-primary-600" /> Service address</label>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-              <input value={houseNo} onChange={(e) => setHouseNo(e.target.value)} placeholder="House / Flat no. *" className="input" required />
-              <input value={area} onChange={(e) => setArea(e.target.value)} placeholder="Area / Locality *" className="input" required />
-              <input value={pincode} onChange={(e) => setPincode(e.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="Pincode (6-digit) *" inputMode="numeric" className="input" required />
-              <input value={city} onChange={(e) => setCity(e.target.value)} placeholder="City *" className="input" required />
-            </div>
-            <input value={landmark} onChange={(e) => setLandmark(e.target.value)} placeholder="Landmark (optional)" className="input mt-2" />
-          </div>
+              {cat ? (
+                <div className="mt-4">
+                  <p className="mb-2 text-[11px] font-extrabold uppercase tracking-wider text-muted">{cat.name} · pick one</p>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {cat.subCategories.map((s) => {
+                      const active = subId === s.id;
+                      return (
+                        <button key={s.id} type="button" onClick={() => setSubId(s.id)} className={`flex items-center justify-between gap-3 rounded-2xl border px-4 py-3 text-left transition-all ${active ? "border-primary-600 bg-primary-50 ring-1 ring-primary-600" : "border-line bg-white hover:border-primary-300 hover:bg-surface"}`}>
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-bold text-ink">{s.name}</p>
+                            <p className="text-[11px] font-medium text-muted">{s.unit}</p>
+                          </div>
+                          <div className="flex shrink-0 items-center gap-2.5">
+                            <b className="text-sm text-primary-700">₹{s.basePrice}</b>
+                            <span className={`flex h-5 w-5 items-center justify-center rounded-full border transition-colors ${active ? "border-primary-600 bg-primary-600 text-white" : "border-line text-transparent"}`}><Check size={11} /></span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : cats.length > 0 ? (
+                <p className="mt-3 text-xs font-medium text-muted">👆 Pick a category to see exact services and fixed prices.</p>
+              ) : null}
+            </section>
 
-          {/* schedule */}
-          <div>
-            <label className="mb-1 flex items-center gap-1.5 text-[13px] font-extrabold text-ink"><Calendar size={14} className="text-primary-600" /> When do you need it?</label>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-              <input type="date" value={date} min={new Date().toISOString().split("T")[0]} onChange={(e) => setDate(e.target.value)} className="input" required />
-              <select value={slotId} onChange={(e) => setSlotId(e.target.value)} className="input" required>
-                <option value="">Pick a time slot…</option>
-                {SLOTS.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
-              </select>
-            </div>
-          </div>
+            {/* 2 · issue */}
+            <section className="card">
+              <p className="mb-3 flex items-center gap-2 text-sm font-extrabold text-ink"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary-600 text-[11px] text-white">2</span> Describe the issue</p>
+              <textarea value={desc} onChange={(e) => setDesc(e.target.value)} rows={3} placeholder="e.g. Bathroom tap is leaking, need it fixed today…" className="input" required />
+            </section>
 
-          {/* payment */}
-          <div>
-            <label className="mb-1 flex items-center gap-1.5 text-[13px] font-extrabold text-ink"><Tag size={14} className="text-primary-600" /> Payment method</label>
-            <div className="flex flex-wrap gap-1.5">
-              {(["cod", "upi", "card", "wallet"] as const).map((p) => (
-                <button key={p} type="button" onClick={() => setPayment(p)} className={`rounded-full border px-4 py-1.5 text-xs font-bold uppercase transition-all ${payment === p ? "border-primary-600 bg-primary-600 text-white" : "border-line bg-white text-body hover:border-primary-300"}`}>{p}</button>
-              ))}
-            </div>
-          </div>
+            {/* 3 · address */}
+            <section className="card">
+              <p className="mb-3 flex items-center gap-2 text-sm font-extrabold text-ink"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary-600 text-[11px] text-white">3</span><MapPin size={15} className="text-primary-600" /> Service address</p>
+              <BookingMapPicker onChange={onMapAddress} />
+              {locPicked ? (
+                <p className="mb-2 mt-1 flex items-center gap-1 rounded-lg bg-success-soft px-2.5 py-1 text-xs font-bold text-success"><Check size={12} /> Location picked from map</p>
+              ) : null}
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <label className="flex items-center gap-2 rounded-xl border border-line bg-white px-3.5 py-2.5 text-sm">
+                  <Home size={15} className="shrink-0 text-primary-600" />
+                  <input value={houseNo} onChange={(e) => setHouseNo(e.target.value)} placeholder="House / Flat no. *" className="w-full bg-transparent font-medium outline-none placeholder:text-muted" required />
+                </label>
+                <input value={area} onChange={(e) => setArea(e.target.value)} placeholder="Area / Locality *" className="input" required />
+                <input value={pincode} onChange={(e) => setPincode(e.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="Pincode (6-digit) *" inputMode="numeric" className="input" required />
+                <input value={city} onChange={(e) => setCity(e.target.value)} placeholder="City *" className="input" required />
+              </div>
+              <input value={landmark} onChange={(e) => setLandmark(e.target.value)} placeholder="Landmark (optional)" className="input mt-2" />
+            </section>
 
-          {/* summary */}
-          {sub ? (
-            <div className="rounded-2xl bg-surface p-4">
-              <p className="mb-2 text-xs font-extrabold uppercase tracking-wider text-muted">Price summary</p>
-              <div className="space-y-1 text-sm">
-                <div className="flex justify-between"><span className="text-body">{sub.name}</span><b className="text-ink">₹{baseAmount.toLocaleString("en-IN")}</b></div>
+            {/* 4 · schedule */}
+            <section className="card">
+              <p className="mb-3 flex items-center gap-2 text-sm font-extrabold text-ink"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary-600 text-[11px] text-white">4</span><Calendar size={15} className="text-primary-600" /> When do you need it?</p>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <input type="date" value={date} min={new Date().toISOString().split("T")[0]} onChange={(e) => setDate(e.target.value)} className="input" required />
+                <select value={slotId} onChange={(e) => setSlotId(e.target.value)} className="input" required>
+                  <option value="">Pick a time slot…</option>
+                  {SLOTS.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
+                </select>
+              </div>
+            </section>
+
+            {err !== "" ? <p className="flex items-start gap-2 rounded-xl bg-danger-soft px-3 py-2 text-[13px] font-semibold text-danger"><AlertCircle size={15} className="mt-0.5 shrink-0" />{err}</p> : null}
+          </form>
+
+          {/* ── right: sticky order summary ── */}
+          <aside className="lg:sticky lg:top-20">
+            <div className="card !p-5">
+              <p className="mb-3 font-extrabold text-ink">Order summary</p>
+
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="text-sm font-bold text-ink">{sub?.name ?? "Select a service"}</p>
+                  <p className="text-xs text-muted">{cat?.name ?? "—"}{sub ? ` • ${sub.unit}` : ""}</p>
+                </div>
+                {sub ? <span className="chip chip-accent shrink-0">Priced</span> : <span className="chip chip-neutral shrink-0">Not selected</span>}
+              </div>
+
+              <div className="mt-4 space-y-1.5 border-t border-slate-100 pt-3 text-sm">
+                <div className="flex justify-between"><span className="text-body">Base price</span><b className="text-ink">₹{baseAmount.toLocaleString("en-IN")}</b></div>
                 <div className="flex justify-between"><span className="text-body">Surge</span><b className="text-ink">₹{surgeAmount}</b></div>
                 <div className="flex justify-between"><span className="text-body">Visiting</span><b className="text-ink">₹{visitingCharge}</b></div>
-                <div className="flex justify-between border-t border-line pt-1.5 text-base"><span className="font-extrabold text-ink">Total</span><span className="font-extrabold text-primary-700">₹{totalAmount.toLocaleString("en-IN")}</span></div>
+                <div className="flex justify-between border-t border-line pt-2 text-base"><span className="font-extrabold text-ink">Total</span><span className="font-extrabold text-primary-700">₹{totalAmount.toLocaleString("en-IN")}</span></div>
               </div>
+
+              {date || slot ? (
+                <div className="mt-3 rounded-xl bg-surface px-3 py-2 text-xs font-semibold text-body">
+                  📅 {date || "—"} · ⏰ {slot?.label ?? "—"}
+                </div>
+              ) : null}
+
+              <div className="mt-3">
+                <p className="mb-1.5 text-xs font-extrabold uppercase tracking-wider text-muted">Payment</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {(["cod", "upi", "card", "wallet"] as const).map((p) => (
+                    <button key={p} type="button" onClick={() => setPayment(p)} className={`rounded-full border px-3 py-1 text-xs font-bold uppercase transition-all ${payment === p ? "border-primary-600 bg-primary-600 text-white" : "border-line bg-white text-body hover:border-primary-300"}`}>{p}</button>
+                  ))}
+                </div>
+              </div>
+
+              {missing.length > 0 ? (
+                <p className="mt-3 rounded-xl bg-accent-soft px-3 py-2 text-[11px] font-semibold text-accent-ink">
+                  Still needed: {missing.join(", ")}
+                </p>
+              ) : null}
+
+              <button type="submit" form="booking-form" disabled={create.isPending} className="btn-primary mt-4 w-full !py-3.5 !text-[15px] disabled:opacity-50">
+                {create.isPending ? <><Loader2 size={17} className="animate-spin" /> Placing booking…</> : <>Confirm booking • ₹{totalAmount.toLocaleString("en-IN")}</>}
+              </button>
+              <p className="mt-2 text-center text-[11px] font-medium text-muted">{payment === "cod" ? "You'll be charged at the door." : "You'll be charged at the door — pay " + payment.toUpperCase() + " after the work is done."}</p>
             </div>
-          ) : null}
-
-          {err !== "" ? <p className="flex items-start gap-2 rounded-xl bg-danger-soft px-3 py-2 text-[13px] font-semibold text-danger"><AlertCircle size={15} className="mt-0.5 shrink-0" />{err}</p> : null}
-
-          <button type="submit" disabled={create.isPending || !canSubmit} className="btn-primary w-full !py-3.5 !text-[15px] disabled:opacity-50">
-            {create.isPending ? <><Loader2 size={17} className="animate-spin" /> Placing booking…</> : <>Confirm booking • ₹{totalAmount.toLocaleString("en-IN")}</>}
-          </button>
-          <p className="text-center text-[11px] font-medium text-muted">You'll be charged at the door — pay {payment.toUpperCase()} after the work is done.</p>
-        </form>
+          </aside>
+        </div>
       </main>
     </div>
   );
