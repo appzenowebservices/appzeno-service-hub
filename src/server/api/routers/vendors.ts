@@ -1,4 +1,5 @@
 import { createTRPCRouter, publicProcedure, protectedProcedure, adminProcedure } from "~/server/api/trpc";
+import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 
 export const vendorsRouter = createTRPCRouter({
@@ -110,6 +111,18 @@ export const vendorsRouter = createTRPCRouter({
           kycStatus: input.approved ? "APPROVED" : "REJECTED",
         },
       });
+      // Notify the vendor of the decision (surfaces in their notification bell).
+      await ctx.db.notification.create({
+        data: {
+          userId: user.id,
+          type: "kyc",
+          title: input.approved ? "KYC approved 🎉" : "KYC not approved",
+          message: input.approved
+            ? "Congratulations! Your KYC is approved — you can now receive leads."
+            : "Your KYC was not approved. Please review your documents and resubmit.",
+          actionUrl: "/vendor",
+        },
+      });
       return ctx.db.user.findUnique({ where: { id: input.id }, include: { vendorProfile: true } });
     }),
 
@@ -163,6 +176,99 @@ export const vendorsRouter = createTRPCRouter({
         orderBy: { sentAt: "desc" },
         take: 50,
       });
+    }),
+
+  // Persist a single KYC doc URL immediately on upload (survives refresh).
+  setKycDoc: protectedProcedure
+    .input(z.object({ aadhaarDoc: z.string().optional(), panDoc: z.string().optional(), profilePhoto: z.string().optional() }))
+    .mutation(async ({ ctx, input }) => {
+      const userId = (ctx.session.user as { id: string }).id;
+      const profile = await ctx.db.vendorProfile.findFirst({ where: { userId } });
+      if (!profile) throw new TRPCError({ code: "NOT_FOUND", message: "Vendor profile not found" });
+      const patch: Record<string, unknown> = {};
+      if (input.aadhaarDoc !== undefined) patch.aadhaarDoc = input.aadhaarDoc === "" ? null : input.aadhaarDoc;
+      if (input.panDoc !== undefined) patch.panDoc = input.panDoc === "" ? null : input.panDoc;
+      if (input.profilePhoto !== undefined) patch.profilePhoto = input.profilePhoto === "" ? null : input.profilePhoto;
+      return ctx.db.vendorProfile.update({ where: { id: profile.id }, data: patch as never });
+    }),
+
+  submitKyc: protectedProcedure
+    .input(
+      z.object({
+        businessName: z.string().min(2).optional(),
+        yearsOfExperience: z.number().int().min(0).max(60).optional(),
+        aadhaarDoc: z.string().url().optional(),
+        panDoc: z.string().url().optional(),
+        profilePhoto: z.string().url().optional(),
+        gst: z.string().max(20).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = (ctx.session.user as { id: string }).id;
+      const profile = await ctx.db.vendorProfile.findFirst({ where: { userId } });
+      if (!profile) throw new TRPCError({ code: "NOT_FOUND", message: "Vendor profile not found" });
+      if (profile.isApproved) throw new TRPCError({ code: "BAD_REQUEST", message: "Already approved" });
+
+      // Everything is optional: a partial submission stays PENDING; only when
+      // the required pieces (business name + all three docs) are present does
+      // it move to UNDER_REVIEW.
+      const complete =
+        !!input.businessName &&
+        !!input.yearsOfExperience &&
+        !!input.aadhaarDoc &&
+        !!input.panDoc &&
+        !!input.profilePhoto;
+
+      return ctx.db.vendorProfile.update({
+        where: { id: profile.id },
+        data: {
+          ...(input.businessName !== undefined ? { businessName: input.businessName } : {}),
+          ...(input.yearsOfExperience !== undefined ? { yearsOfExperience: input.yearsOfExperience } : {}),
+          ...(input.aadhaarDoc !== undefined ? { aadhaarDoc: input.aadhaarDoc } : {}),
+          ...(input.panDoc !== undefined ? { panDoc: input.panDoc } : {}),
+          ...(input.profilePhoto !== undefined ? { profilePhoto: input.profilePhoto } : {}),
+          ...(input.gst !== undefined ? { gst: input.gst?.trim() === "" ? null : input.gst } : {}),
+          kycStatus: complete ? "UNDER_REVIEW" : "PENDING",
+          ...(complete ? { kycSubmittedAt: new Date() } : {}),
+        },
+      });
+    }),
+
+  remindKyc: adminProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const user = await ctx.db.user.findFirst({
+        where: { id: input.id, role: "VENDOR" },
+        include: { vendorProfile: true },
+      });
+      if (!user?.vendorProfile) throw new TRPCError({ code: "NOT_FOUND", message: "Vendor profile not found" });
+
+      // Build the missing-items list from what KYC requires.
+      const missing: string[] = [];
+      const p = user.vendorProfile;
+      if (!p.businessName.trim()) missing.push("Business name");
+      if (!p.yearsOfExperience) missing.push("Years of experience");
+      if (!p.aadhaarDoc) missing.push("Aadhaar card");
+      if (!p.panDoc) missing.push("PAN card");
+      if (!p.profilePhoto) missing.push("Profile photo");
+      if (!p.gst) missing.push("GSTIN");
+
+      if (missing.length === 0) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Nothing missing — KYC is complete" });
+      }
+
+      // Store a notification for the vendor (surfaces in their bell / dashboard).
+      await ctx.db.notification.create({
+        data: {
+          userId: user.id,
+          type: "kyc",
+          title: "KYC reminder — items missing",
+          message: `Please complete your KYC: ${missing.join(", ")}.`,
+          actionUrl: "/vendor",
+        },
+      });
+
+      return { missing, sent: true };
     }),
 });
 

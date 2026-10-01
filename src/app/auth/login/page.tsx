@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { Eye, EyeOff, LogIn, ShieldCheck, UserCircle, Briefcase, Building2, Crown, Loader2, AlertCircle, ArrowLeft, BadgeCheck, Wallet, Star } from "lucide-react";
+import { Eye, EyeOff, LogIn, ShieldCheck, UserCircle, Briefcase, Building2, Crown, Loader2, AlertCircle, ArrowLeft, BadgeCheck, Wallet, Star, CheckCircle2 } from "lucide-react";
 import { signIn, getSession } from "next-auth/react";
 import { useAuthStore } from "../../../../store/authStore";
 import { trpc } from "~/trpc/react";
@@ -20,6 +20,7 @@ export default function LoginPage() {
   const [remember, setRemember] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [welcome, setWelcome] = useState<{ name: string; dest: string } | null>(null);
   const utils = trpc.useUtils();
 
   useEffect(() => {
@@ -41,6 +42,8 @@ export default function LoginPage() {
 
     // Pre-check credentials via tRPC first so we can tell "unverified email"
     // apart from "wrong password" (NextAuth only returns a generic error).
+    // A failed pre-check does NOT stop the login: DB-unknown accounts (like
+    // the env-root superadmin) are decided by authorize() itself.
     try {
       const check = await utils.auth.login.fetch({ mobile: mobile.trim(), password });
       if (!check.isVerified) {
@@ -49,9 +52,7 @@ export default function LoginPage() {
         return;
       }
     } catch {
-      setLoading(false);
-      setError("Invalid mobile or password. Try demo credentials below.");
-      return;
+      // fall through to signIn — authorize() is the final authority
     }
 
     const result = await signIn("credentials", {
@@ -108,8 +109,13 @@ export default function LoginPage() {
       AGENT: "/agent",
       ADMIN: "/admin",
     };
-    router.push(dashMap[role] ?? "/");
-    router.refresh();
+    const dest = dashMap[role] ?? "/";
+    // Success beat: show a welcome overlay momentarily instead of a hard cut.
+    setWelcome({ name: fullName.trim() === "" ? "Welcome back" : fullName.trim(), dest });
+    window.setTimeout(() => {
+      router.push(dest);
+      router.refresh();
+    }, 1400);
   };
 
   const ROLE_HINTS = [
@@ -299,6 +305,22 @@ export default function LoginPage() {
           </p>
         </div>
       </main>
+
+      {/* ── success overlay ── */}
+      {welcome ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/60 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-3xl bg-white p-8 text-center shadow-pop">
+            <span className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-success-soft">
+              <CheckCircle2 size={32} className="text-success" />
+            </span>
+            <p className="mt-4 text-xl font-extrabold tracking-tight text-ink">Welcome back, {welcome.name}!</p>
+            <p className="sub mt-1">Signed in successfully — taking you to your dashboard…</p>
+            <div className="mx-auto mt-5 h-1.5 w-40 overflow-hidden rounded-full bg-surface">
+              <div className="h-full w-full origin-left animate-pulse rounded-full bg-gradient-to-r from-primary-600 to-accent-400" />
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

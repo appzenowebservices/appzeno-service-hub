@@ -67,10 +67,19 @@ export const authConfig = {
 
         if (!user?.passwordHash) return null;
         if (!user.isActive) return null;
-        // Email-gated login: accounts stay locked until the owner confirms
-        // their email (Omnipost event flips isVerified). Env superadmin above
-        // bypasses this — it has no DB row.
-        if (!user.isVerified) return null;
+        // Email-gated login per role. Rule (explicit for vendors): a vendor
+        // logs in when their email is verified (isVerified === true) — flipped
+        // by the Omnipost subscriber.confirmed webhook, never by KYC.
+        // Env superadmin above bypasses this — it has no DB row.
+        if (!user.isVerified) {
+          console.info(
+            `[auth] login.blocked {"role":"${user.role}","reason":"unverified"}`,
+          );
+          return null;
+        }
+        if (user.role === "VENDOR") {
+          console.info(`[auth] login.vendor {"verified":true}`);
+        }
 
         const valid = await compare(password, user.passwordHash as string);
         if (!valid) return null;

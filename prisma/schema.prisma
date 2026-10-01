@@ -101,6 +101,12 @@ model VendorProfile {
   totalReviews     Int      @default(0)
   basePricing      Json
   isApproved       Boolean   @default(false)
+  // ── KYC documents (UploadThing URLs, set by the vendor's own submission) ──
+  aadhaarDoc       String?
+  panDoc           String?
+  profilePhoto     String?
+  gst              String?
+  kycSubmittedAt   DateTime?
 }
 
 model AgentProfile {

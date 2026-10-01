@@ -7,12 +7,13 @@ import { useRouter } from "next/navigation";
 import { signOut, useSession } from "next-auth/react";
 import {
   LayoutDashboard, UserCheck, CalendarClock, Store, Users, MapPinned, Tags, Wallet,
-  Megaphone, Search, Check, X, Ban, RefreshCw, Plus, LogOut, IndianRupee, TrendingUp,
-  Clock, AlertTriangle, Star, ExternalLink, Receipt, Send, Globe, ChevronRight,
+  Megaphone, Search, Check, Ban, RefreshCw, Plus, LogOut, IndianRupee, TrendingUp,
+  Clock, AlertTriangle, Star, ExternalLink, Receipt, Send, Globe, ChevronRight, Bell,
 } from "lucide-react";
 import { trpc } from "~/trpc/react";
 import { generateReactHelpers } from "@uploadthing/react";
 import type { OurFileRouter } from "~/app/uploadthing";
+import { LoadingConsole, StatSkeleton, ChartSkeleton, ListSkeleton, InlineSync } from "~/app/admin/components/loaders";
 
 const { useUploadThing } = generateReactHelpers<OurFileRouter>();
 
@@ -48,8 +49,8 @@ interface StatsData {
   recentBookings: { id: string; status: string; totalAmount: number; customer?: { fullName: string } | null }[];
 }
 interface VendorRow {
-  id: string; fullName: string; mobile: string; city: string; isActive: boolean;
-  vendorProfile?: { businessName: string; kycStatus: string; isApproved: boolean; subscriptionPlan: string; rating: number; totalReviews: number; serviceCategories: string[] } | null;
+  id: string; fullName: string; mobile: string; city: string; isActive: boolean; isVerified: boolean;
+  vendorProfile?: { businessName: string; kycStatus: string; isApproved: boolean; subscriptionPlan: string; rating: number; totalReviews: number; serviceCategories: string[]; yearsOfExperience: number; gst?: string | null; aadhaarDoc?: string | null; panDoc?: string | null; profilePhoto?: string | null } | null;
 }
 interface BookingRow {
   id: string; status: string; paymentStatus: string; totalAmount: number; description: string;
@@ -75,6 +76,49 @@ function fmtCount(n: number): string {
     return `${v >= 100 ? Math.round(v) : v.toFixed(1).replace(/\.0$/, "")}k`;
   }
   return `${n}`;
+}
+
+/** KYC completeness for a vendor profile: what's filled vs missing. */
+function kycChecklist(p: VendorRow["vendorProfile"]) {
+  const items: { label: string; ok: boolean }[] = [
+    { label: "Business name", ok: !!p?.businessName?.trim() },
+    { label: "Experience", ok: !!p?.yearsOfExperience },
+    { label: "Aadhaar card", ok: !!p?.aadhaarDoc },
+    { label: "PAN card", ok: !!p?.panDoc },
+    { label: "Profile photo", ok: !!p?.profilePhoto },
+    { label: "GSTIN", ok: !!p?.gst },
+  ];
+  return { items, missing: items.filter((i) => !i.ok).map((i) => i.label) };
+}
+
+function KycChecklist({ p }: { p: VendorRow["vendorProfile"] }) {
+  const { items, missing } = kycChecklist(p);
+  const done = items.filter((i) => i.ok).length;
+  return (
+    <div className="rounded-2xl border border-line bg-surface p-3">
+      <div className="mb-2 flex items-center justify-between">
+        <p className="text-[11px] font-extrabold uppercase tracking-wider text-muted">KYC details</p>
+        <span className={`rounded-full px-2 py-0.5 text-[11px] font-extrabold ${missing.length === 0 ? "bg-success-soft text-success" : "bg-accent-100 text-accent-600"}`}>
+          {done}/6 filled
+        </span>
+      </div>
+      <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+        {items.map((i) => (
+          <span key={i.label} className="flex items-center gap-1.5 text-xs font-semibold text-body">
+            <span className={`flex h-4 w-4 items-center justify-center rounded-full text-[9px] font-extrabold ${i.ok ? "bg-success text-white" : "bg-accent-300 text-accent-ink"}`}>
+              {i.ok ? "✓" : "!"}
+            </span>
+            {i.label}
+          </span>
+        ))}
+      </div>
+      {missing.length > 0 ? (
+        <p className="mt-2 text-[11px] font-semibold text-accent-600">Missing: {missing.join(", ")}</p>
+      ) : (
+        <p className="mt-2 text-[11px] font-semibold text-success">All KYC items submitted</p>
+      )}
+    </div>
+  );
 }
 
 function Chip({ value }: { value: string }) {
@@ -184,6 +228,7 @@ export default function AdminPage() {
   const router = useRouter();
   const utils = trpc.useUtils();
   const [tab, setTab] = useState<Tab>("overview");
+  const [loggingOut, setLoggingOut] = useState<"confirm" | "signedout" | null>(null);
   const [bookingStatus, setBookingStatus] = useState<(typeof STATUSES)[number]>("ALL");
   const [bookingSearch, setBookingSearch] = useState("");
   const [userRole, setUserRole] = useState<(typeof USER_ROLES)[number]>("ALL");
@@ -241,6 +286,7 @@ export default function AdminPage() {
   const updateCat = trpc.admin.updateCategory.useMutation({ onSuccess: () => void catsQ.refetch() });
   const seedCats = trpc.admin.seedCategories.useMutation({ onSuccess: () => void catsQ.refetch() });
   const updateComm = trpc.admin.updateAgentCommission.useMutation({ onSuccess: () => void agentsQ.refetch() });
+  const remindKyc = trpc.vendors.remindKyc.useMutation({ onSuccess: () => alert("Reminder sent to the vendor's notifications.") });
   const broadcast = trpc.admin.broadcast.useMutation({ onSuccess: () => void notifsQ.refetch() });
 
   const stats = statsQ.data as StatsData | undefined;
@@ -284,7 +330,12 @@ export default function AdminPage() {
   const maxTrend = Math.max(1, ...((stats?.trend ?? []).map((t) => t.revenue)));
   const maxFunnel = Math.max(1, ...SET_STATUSES.map((s) => stats?.byStatus[s] ?? 0));
 
-  if (status === "loading") return <div className="p-10 text-muted">Loading console…</div>;
+  if (status === "loading") return <LoadingConsole />;
+
+  const performLogout = () => {
+    setLoggingOut("signedout");
+    window.setTimeout(() => signOut({ callbackUrl: "/" }), 1200);
+  };
   if (status !== "authenticated" || role !== "ADMIN") {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-surface">
@@ -337,7 +388,7 @@ export default function AdminPage() {
           <Link href="/" className="flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm font-bold text-slate-300 hover:bg-white/10 hover:text-white">
             <Globe size={17} /> View site <ExternalLink size={12} className="ml-auto" />
           </Link>
-          <button onClick={() => signOut({ callbackUrl: "/" })} className="flex w-full items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm font-bold text-danger hover:bg-danger-soft">
+          <button onClick={() => setLoggingOut("confirm")} className="flex w-full items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm font-bold text-danger hover:bg-danger-soft">
             <LogOut size={17} /> Logout
           </button>
           <p className="px-3.5 pb-2 pt-1 font-mono text-[11px] text-slate-500">{myMobile}</p>
@@ -350,7 +401,7 @@ export default function AdminPage() {
           <div className="flex h-14 items-center gap-2 px-3">
             <Image src="/logo.png" alt="ADDies" width={30} height={30} className="h-8 w-8 object-contain" />
             <p className="text-sm font-extrabold text-ink">Ops Console</p>
-            <button onClick={() => signOut({ callbackUrl: "/" })} className="ml-auto rounded-full px-3 py-1.5 text-xs font-bold text-danger hover:bg-danger-soft">Logout</button>
+            <button onClick={() => setLoggingOut("confirm")} className="ml-auto rounded-full px-3 py-1.5 text-xs font-bold text-danger hover:bg-danger-soft">Logout</button>
           </div>
           <nav className="no-scrollbar flex gap-1.5 overflow-x-auto px-3 pb-2.5">
             {NAV.map(({ key, label, badge }) => (
@@ -374,7 +425,7 @@ export default function AdminPage() {
           {/* ══════════ OVERVIEW ══════════ */}
           {tab === "overview" && (
             <>
-              {statsQ.isLoading ? <p className="sub">Loading live platform stats…</p> : null}
+              {statsQ.isLoading ? (<div className="space-y-4"><StatSkeleton /><ChartSkeleton /></div>) : null}
               {stats ? (
                 <>
                   <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -427,7 +478,7 @@ export default function AdminPage() {
                                 <span className="font-extrabold text-ink">{n}</span>
                               </div>
                               <div className="h-2 overflow-hidden rounded-full bg-surface">
-                                <div className={`h-full rounded-full ${s === "COMPLETED" ? "bg-success" : s === "DISPUTED" ? "bg-danger" : s === "CANCELLED" ? "bg-slate-300" : "bg-primary-500"}`} style={{ width: `${Math.max(2, Math.round((n / maxFunnel) * 100))}%` }} />
+                                <div className={`h-full rounded-full ${s === "COMPLETED" ? "bg-success" : s === "DISPUTED" ? "bg-danger" : s === "CANCELLED" ? "bg-muted/50" : "bg-primary-500"}`} style={{ width: `${Math.max(2, Math.round((n / maxFunnel) * 100))}%` }} />
                               </div>
                             </button>
                           );
@@ -488,9 +539,9 @@ export default function AdminPage() {
             <Card>
               <div className="mb-1 flex items-center justify-between">
                 <p className="font-extrabold text-ink">KYC & vendor approvals <span className="chip chip-accent ml-2">{pendingKyc.length} pending</span></p>
-                {vendorsQ.isFetching ? <span className="text-xs font-semibold text-muted">Syncing…</span> : null}
+                {vendorsQ.isFetching ? <InlineSync label="Syncing" /> : null}
               </div>
-              <p className="sub mb-4">Approve genuine pros, reject fraud. Vendors go live the moment you approve.</p>
+              <p className="sub mb-4">Review what the vendor submitted, see what&apos;s missing, then approve or nudge them with a reminder.</p>
               {pendingKyc.length === 0 ? (
                 <Empty title="Queue is empty" hint="New vendor registrations land here for KYC review." />
               ) : (
@@ -499,16 +550,16 @@ export default function AdminPage() {
                     <div key={v.id} className="rounded-2xl border border-line p-4">
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div>
-                          <p className="font-extrabold text-ink">{v.vendorProfile?.businessName ?? v.fullName} <Chip value={v.vendorProfile?.kycStatus ?? "PENDING"} /></p>
+                          <p className="font-extrabold text-ink">{v.vendorProfile?.businessName ?? v.fullName} <Chip value={v.vendorProfile?.kycStatus ?? "PENDING"} /> {!v.isVerified ? <span className="chip chip-neutral">Email unverified</span> : <span className="chip chip-success">Email verified</span>}</p>
                           <p className="mt-0.5 text-[13px] text-muted">{v.fullName} • {v.mobile} • {v.city}</p>
-                          <p className="mt-1 text-xs font-semibold text-body">
-                            {(v.vendorProfile?.serviceCategories ?? []).slice(0, 4).join(", ") || "No categories yet"} • {v.vendorProfile?.subscriptionPlan ?? "FREE"} plan • ★{(v.vendorProfile?.rating ?? 0).toFixed(1)} ({v.vendorProfile?.totalReviews ?? 0})
-                          </p>
                         </div>
                         <div className="flex gap-2">
                           <button onClick={() => approveVendor.mutate({ id: v.id, approved: true })} disabled={approveVendor.isPending} className="btn-primary !bg-success !px-4 !py-2 !text-[13px] disabled:opacity-50"><Check size={14} /> Approve</button>
-                          <button onClick={() => approveVendor.mutate({ id: v.id, approved: false })} disabled={approveVendor.isPending} className="btn-ghost !px-4 !py-2 !text-[13px] disabled:opacity-50"><X size={14} /> Reject</button>
+                          <button onClick={() => remindKyc.mutate({ id: v.id })} disabled={remindKyc.isPending} className="btn-accent !px-4 !py-2 !text-[13px] disabled:opacity-50"><Bell size={14} /> Remind</button>
                         </div>
+                      </div>
+                      <div className="mt-3">
+                        <KycChecklist p={v.vendorProfile} />
                       </div>
                     </div>
                   ))}
@@ -538,7 +589,7 @@ export default function AdminPage() {
                   <Clock size={14} /> {unassigned.length} unassigned PENDING booking{unassigned.length === 1 ? "" : "s"} — assign a vendor below.
                 </div>
               ) : null}
-              {bookingsQ.isLoading ? <p className="sub">Loading bookings…</p> : null}
+              {bookingsQ.isLoading ? <ListSkeleton rows={5} height="h-20" /> : null}
               {bookings.length === 0 && !bookingsQ.isLoading ? (
                 <Card><Empty title="No bookings found" hint="Try a different status filter or search. New customer bookings appear here in real time." /></Card>
               ) : (
@@ -611,41 +662,90 @@ export default function AdminPage() {
 
           {/* ══════════ VENDORS ══════════ */}
           {tab === "vendors" && (
-            <Card>
-              <div className="mb-4 flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
-                <p className="font-extrabold text-ink">All vendors <span className="chip chip-neutral ml-1">{vendors.length}</span></p>
-                <label className="relative w-full sm:w-64">
+            <div className="space-y-3">
+              <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-[13px] font-bold text-muted">
+                  <b className="text-ink">{vendors.length}</b> vendors
+                  <span className="chip chip-success ml-2">{vendors.filter((v) => v.vendorProfile?.isApproved && v.isVerified).length} fully live</span>
+                  <span className="chip chip-accent ml-1">{vendors.filter((v) => v.vendorProfile?.isApproved && !v.isVerified).length} KYC done, email pending</span>
+                  <span className="chip chip-neutral ml-1">{vendors.filter((v) => !v.vendorProfile?.isApproved).length} awaiting KYC</span>
+                </p>
+                <label className="relative w-full sm:w-72">
                   <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
                   <input value={vendorSearch} onChange={(e) => setVendorSearch(e.target.value)} placeholder="Search business, name, city…" className="input !pl-9 !py-2" />
                 </label>
               </div>
               {vendorRows.length === 0 ? (
-                <Empty title="No vendors found" hint="Approved vendors appear here with ratings, plans and controls." />
+                <Card>
+                  <Empty title="No vendors found" hint="Vendors appear here with their email-verification and KYC-approval status, ratings, plans and controls." />
+                </Card>
               ) : (
-                <div className="space-y-2">
-                  {vendorRows.map((v) => (
-                    <div key={v.id} className="row-line flex flex-wrap items-center justify-between gap-2 !py-3">
-                      <div className="min-w-0">
-                        <p className="flex flex-wrap items-center gap-2 text-sm font-extrabold text-ink">
-                          {v.vendorProfile?.businessName ?? v.fullName}
-                          <Chip value={v.vendorProfile?.isApproved ? "APPROVED" : (v.vendorProfile?.kycStatus ?? "PENDING")} />
+                <div className="grid gap-2.5 lg:grid-cols-2">
+                  {vendorRows.map((v) => {
+                    const live = v.vendorProfile?.isApproved === true && v.isVerified === true;
+                    return (
+                      <div key={v.id} className="card card-hover !p-4">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex min-w-0 items-center gap-3">
+                            <span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl text-sm font-extrabold text-white ${live ? "bg-gradient-to-br from-success to-emerald-600" : "bg-gradient-to-br from-primary-500 to-primary-700"}`}>
+                              {(v.vendorProfile?.businessName ?? v.fullName).slice(0, 2).toUpperCase()}
+                            </span>
+                            <div className="min-w-0">
+                              <p className="truncate text-[15px] font-extrabold leading-tight text-ink">{v.vendorProfile?.businessName ?? v.fullName}</p>
+                              <p className="mt-0.5 truncate text-xs text-muted">{v.fullName} • {v.mobile} • {v.city}</p>
+                            </div>
+                          </div>
+                          <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-extrabold ${live ? "bg-success-soft text-success ring-1 ring-success/20" : "bg-surface text-muted ring-1 ring-line"}`}>
+                            {live ? "● LIVE" : "○ OFF"}
+                          </span>
+                        </div>
+
+                        <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                          <span className={v.isVerified ? "chip chip-success" : "chip chip-neutral"}>
+                            {v.isVerified ? "✓ Email verified" : "Email unverified"}
+                          </span>
+                          <span className={v.vendorProfile?.isApproved ? "chip chip-primary" : "chip chip-accent"}>
+                            {v.vendorProfile?.isApproved ? "✓ KYC approved" : `KYC ${v.vendorProfile?.kycStatus ?? "PENDING"}`}
+                          </span>
                           {!v.isActive ? <span className="chip chip-danger">BLOCKED</span> : null}
-                        </p>
-                        <p className="mt-0.5 text-xs text-muted">{v.fullName} • {v.mobile} • {v.city} • {v.vendorProfile?.subscriptionPlan ?? "FREE"} • <Star size={11} className="mb-px inline text-accent-500" />{(v.vendorProfile?.rating ?? 0).toFixed(1)} ({v.vendorProfile?.totalReviews ?? 0})</p>
-                      </div>
-                      <div className="flex gap-1.5">
-                        {!v.vendorProfile?.isApproved ? (
-                          <button onClick={() => approveVendor.mutate({ id: v.id, approved: true })} className="rounded-full bg-success px-3 py-1.5 text-xs font-bold text-white">Approve</button>
+                          <span className="chip chip-neutral">{v.vendorProfile?.subscriptionPlan ?? "FREE"} plan</span>
+                          <span className="chip chip-accent">★ {(v.vendorProfile?.rating ?? 0).toFixed(1)} ({v.vendorProfile?.totalReviews ?? 0})</span>
+                        </div>
+
+                        {(v.vendorProfile?.serviceCategories ?? []).length > 0 ? (
+                          <p className="mt-2.5 line-clamp-1 text-xs font-semibold text-body">
+                            {(v.vendorProfile?.serviceCategories ?? []).slice(0, 5).join(" • ")}
+                            {(v.vendorProfile?.serviceCategories ?? []).length > 5 ? "…" : ""}
+                          </p>
                         ) : null}
-                        <button onClick={() => toggleVendor.mutate({ id: v.id, isActive: !v.isActive })} className={v.isActive ? "btn-danger-ghost" : "btn-primary !px-3.5 !py-1.5 !text-xs"}>
-                          {v.isActive ? <><Ban size={13} /> Block</> : "Unblock"}
-                        </button>
+
+                        <div className="mt-3">
+                          <KycChecklist p={v.vendorProfile} />
+                        </div>
+
+                        <div className="mt-3 flex flex-wrap gap-1.5 border-t border-slate-100 pt-3">
+                          {!v.vendorProfile?.isApproved ? (
+                            <>
+                              <button onClick={() => approveVendor.mutate({ id: v.id, approved: true })} disabled={approveVendor.isPending} className="rounded-full bg-success px-4 py-1.5 text-xs font-bold text-white hover:brightness-95 disabled:opacity-50">
+                                <Check size={13} className="mr-1 inline" />Approve KYC
+                              </button>
+                              <button onClick={() => remindKyc.mutate({ id: v.id })} disabled={remindKyc.isPending} className="btn-accent !px-3.5 !py-1.5 !text-xs disabled:opacity-50">
+                                <Bell size={13} className="mr-1 inline" />Remind
+                              </button>
+                            </>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-success-soft px-3 py-1.5 text-xs font-bold text-success ring-1 ring-success/20"><Check size={13} /> KYC approved</span>
+                          )}
+                          <button onClick={() => toggleVendor.mutate({ id: v.id, isActive: !v.isActive })} className={v.isActive ? "btn-danger-ghost" : "btn-primary !px-3.5 !py-1.5 !text-xs"}>
+                            {v.isActive ? <><Ban size={13} /> Block</> : "Unblock"}
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
-            </Card>
+            </div>
           )}
 
           {/* ══════════ USERS ══════════ */}
@@ -662,7 +762,7 @@ export default function AdminPage() {
                   <input value={userSearch} onChange={(e) => setUserSearch(e.target.value)} placeholder="Search name, mobile, email…" className="input !pl-9 !py-2" />
                 </label>
               </div>
-              {usersQ.isLoading ? <p className="sub">Loading users…</p> : null}
+              {usersQ.isLoading ? <ListSkeleton rows={6} /> : null}
               {users.length === 0 && !usersQ.isLoading ? (
                 <Empty title="No users found" hint="Adjust the role filter or search — every registration lands here." />
               ) : (
@@ -686,7 +786,7 @@ export default function AdminPage() {
             <Card>
               <p className="mb-1 font-extrabold text-ink">City agents & commission economics</p>
               <p className="sub mb-4">Commission is earned on completed-booking GMV inside each agent&apos;s assigned city.</p>
-              {agentsQ.isLoading ? <p className="sub">Loading agents…</p> : null}
+              {agentsQ.isLoading ? <ListSkeleton rows={4} /> : null}
               {agents.length === 0 && !agentsQ.isLoading ? (
                 <Empty title="No agents yet" hint="Agents register via Join as Agent and get a city territory assigned." />
               ) : (
@@ -817,7 +917,7 @@ export default function AdminPage() {
               <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
                 <p className="text-[13px] font-bold text-muted">
                   <b className="text-ink">{visibleCats.length}</b> of <b className="text-ink">{cats.length}</b> categories
-                  {catsQ.isFetching ? <span className="ml-2 font-semibold">Syncing…</span> : null}
+                  {catsQ.isFetching ? <span className="ml-2"><InlineSync label="Syncing" /></span> : null}
                 </p>
                 <label className="relative w-full sm:w-72">
                   <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
@@ -932,7 +1032,7 @@ export default function AdminPage() {
               </div>
               <Card>
                 <p className="mb-3 font-extrabold text-ink">Wallet ledger <span className="text-xs font-semibold text-muted">— latest first (credits = bonus/refund, debits = spend)</span></p>
-                {walletQ.isLoading ? <p className="sub">Loading ledger…</p> : null}
+                {walletQ.isLoading ? <ListSkeleton rows={6} /> : null}
                 {txs.length === 0 && !walletQ.isLoading ? (
                   <Empty title="No wallet movement yet" hint="Welcome bonuses, refunds and wallet spends all ledger here." />
                 ) : (
@@ -994,6 +1094,37 @@ export default function AdminPage() {
           )}
         </main>
       </div>
+
+      {/* ── logout confirm / signed-out overlays ── */}
+      {loggingOut === "confirm" ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/60 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-3xl bg-white p-6 text-center shadow-pop">
+            <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-danger-soft">
+              <LogOut size={24} className="text-danger" />
+            </span>
+            <p className="mt-3 text-lg font-extrabold tracking-tight text-ink">Sign out of the console?</p>
+            <p className="sub mt-1">You&apos;ll be returned to the home page.</p>
+            <div className="mt-5 grid grid-cols-2 gap-2.5">
+              <button onClick={() => setLoggingOut(null)} className="btn-ghost !py-3">Cancel</button>
+              <button onClick={performLogout} className="btn-primary !bg-danger !py-3">Sign out</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {loggingOut === "signedout" ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/60 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-3xl bg-white p-8 text-center shadow-pop">
+            <span className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-primary-50">
+              <LogOut size={28} className="text-primary-600" />
+            </span>
+            <p className="mt-4 text-xl font-extrabold tracking-tight text-ink">Signed out</p>
+            <p className="sub mt-1">See you soon — redirecting home…</p>
+            <div className="mx-auto mt-5 h-1.5 w-40 overflow-hidden rounded-full bg-surface">
+              <div className="h-full w-full origin-left animate-pulse rounded-full bg-gradient-to-r from-primary-600 to-accent-400" />
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
