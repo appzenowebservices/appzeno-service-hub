@@ -139,6 +139,7 @@ export const adminRouter = createTRPCRouter({
         fullName: a.fullName,
         mobile: a.mobile,
         city,
+        isVerified: a.isVerified,
         commissionPercent: pct,
         cityBookings: cityRows.length,
         cityGmv: gmv,

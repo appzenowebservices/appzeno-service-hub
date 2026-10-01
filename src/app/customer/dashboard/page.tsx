@@ -8,7 +8,7 @@ import { trpc } from "~/trpc/react";
 export default function CustomerDashboard() {
   const { data: session, status } = useSession();
   const router = useRouter();
-  const sUser = session?.user as { id?: string; role?: string } | undefined;
+  const sUser = session?.user;
   const customerId = sUser?.id ?? "";
 
   const meQ = trpc.users.getById.useQuery({ id: customerId }, { enabled: !!customerId });
@@ -36,7 +36,7 @@ export default function CustomerDashboard() {
           <p className="text-xs text-muted">Wallet <b className="text-accent-600">₹{me?.customerProfile?.walletBalance ?? 0}</b> • {bookings.length} bookings</p>
         </div>
         <div className="flex gap-2">
-          <Link href="/services" className="btn-primary !py-2">Book service</Link>
+          <Link href="/customer/booking" className="btn-primary !py-2">Book service</Link>
           <button onClick={() => signOut({ callbackUrl: "/" })} className="rounded-full px-3 py-2 text-sm font-bold text-danger hover:bg-danger-soft">Logout</button>
         </div>
       </header>

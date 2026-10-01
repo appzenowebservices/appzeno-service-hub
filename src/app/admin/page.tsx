@@ -61,7 +61,7 @@ interface UserRow {
   id: string; fullName: string; mobile: string; role: string; city: string; isActive: boolean;
   customerProfile?: { walletBalance: number } | null;
 }
-interface AgentRow { id: string; fullName: string; mobile: string; city: string; commissionPercent: number; cityBookings: number; cityGmv: number; commissionEarned: number }
+interface AgentRow { id: string; fullName: string; mobile: string; city: string; isVerified: boolean; commissionPercent: number; cityBookings: number; cityGmv: number; commissionEarned: number }
 interface CatRow { id: string; slug: string; name: string; icon: string; image?: string | null; rating: number; totalBookings: number; isFeatured: boolean; sortOrder: number; isActive: boolean; commissionPercent: number; subCategories: { id: string; name: string; basePrice: number; unit: string }[] }
 interface TxRow { id: string; type: string; amount: number; description: string; balanceAfter: number; createdAt: string | Date; user: { fullName: string; mobile: string; role: string } }
 interface NotifRow { id: string; title: string; message: string; type: string; createdAt: string | Date }
@@ -695,9 +695,15 @@ export default function AdminPage() {
                               <p className="mt-0.5 truncate text-xs text-muted">{v.fullName} • {v.mobile} • {v.city}</p>
                             </div>
                           </div>
-                          <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-extrabold ${live ? "bg-success-soft text-success ring-1 ring-success/20" : "bg-surface text-muted ring-1 ring-line"}`}>
-                            {live ? "● LIVE" : "○ OFF"}
-                          </span>
+                          <div className="flex shrink-0 flex-col items-end gap-1">
+                            <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-extrabold ${live ? "bg-success-soft text-success ring-1 ring-success/20" : "bg-surface text-muted ring-1 ring-line"}`}>
+                              {live ? "● LIVE" : "○ OFF"}
+                            </span>
+                            {/* email-verification status, driven by isVerified */}
+                            <span className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-extrabold ring-1 ${v.isVerified ? "bg-primary-50 text-primary-700 ring-primary-200" : "bg-accent-100 text-accent-600 ring-accent-200"}`}>
+                              {v.isVerified ? "✓ Email verified" : "! Email unverified"}
+                            </span>
+                          </div>
                         </div>
 
                         <div className="mt-3 flex flex-wrap items-center gap-1.5">
@@ -795,7 +801,12 @@ export default function AdminPage() {
                     <div key={a.id} className="rounded-2xl border border-line p-4">
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div>
-                          <p className="font-extrabold text-ink">{a.fullName} <span className="chip chip-primary ml-1">{a.city}</span></p>
+                          <p className="flex flex-wrap items-center gap-2 font-extrabold text-ink">{a.fullName} <span className="chip chip-primary">{a.city}</span>
+                            {/* email-verification status, driven by isVerified */}
+                            <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-extrabold ring-1 ${a.isVerified ? "bg-primary-50 text-primary-700 ring-primary-200" : "bg-accent-100 text-accent-600 ring-accent-200"}`}>
+                              {a.isVerified ? "✓ Email verified" : "! Email unverified"}
+                            </span>
+                          </p>
                           <p className="mt-0.5 text-xs text-muted">{a.mobile} • {a.cityBookings} city bookings • {inr(a.cityGmv)} city GMV</p>
                         </div>
                         <div className="flex items-center gap-3">

@@ -51,7 +51,7 @@ export default async function ServicesPage({ searchParams }: { searchParams?: Pr
                   <span className="font-extrabold text-ink">₹{s.basePrice.toLocaleString("en-IN")}</span>
                 </div>
               ))}
-              <Link href={`/customer/dashboard?cat=${c.slug}`} className="btn-primary mt-3 !py-2 !text-xs">Book {c.name} →</Link>
+              <Link href={`/customer/booking`} className="btn-primary mt-3 !py-2 !text-xs">Book {c.name} →</Link>
             </div>
           ))}
         </div>
