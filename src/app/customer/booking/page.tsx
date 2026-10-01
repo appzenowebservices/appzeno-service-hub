@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { CheckCircle2, Loader2, Calendar, MapPin, Tag, AlertCircle, ArrowLeft, Wrench } from "lucide-react";
 import { trpc } from "~/trpc/react";
+import RazorpayCheckout from "./RazorpayCheckout";
 
 const SLOTS = [
   { id: "m1", label: "9:00 AM – 12:00 PM", start: "09:00", end: "12:00" },
@@ -20,8 +21,9 @@ interface Cat {
 }
 
 export default function CustomerBookingPage() {
-  const { status } = useSession();
+  const { data: session, status } = useSession();
   const router = useRouter();
+  const mobile = session?.user?.mobile ?? "";
 
   const [catId, setCatId] = useState("");
   const [subId, setSubId] = useState("");
@@ -36,6 +38,7 @@ export default function CustomerBookingPage() {
   const [payment, setPayment] = useState<"cod" | "upi" | "card" | "wallet">("cod");
   const [err, setErr] = useState("");
   const [createdId, setCreatedId] = useState("");
+  const [paidOnline, setPaidOnline] = useState(false);
 
   const catsQ = trpc.categories.getAll.useQuery(undefined, { enabled: status === "authenticated" });
   const create = trpc.bookings.create.useMutation({
@@ -93,12 +96,18 @@ export default function CustomerBookingPage() {
         <div className="w-full max-w-md rounded-3xl bg-white p-8 text-center shadow-pop">
           <span className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-success-soft"><CheckCircle2 size={32} className="text-success" /></span>
           <p className="mt-4 text-xl font-extrabold text-ink">Booking placed!</p>
-          <p className="sub mt-1">Your request is live. An agent will assign a verified pro shortly.</p>
+          <p className="sub mt-1">{paidOnline ? "Payment received — your pro will be assigned shortly." : "Your request is live. An agent will assign a verified pro shortly."}</p>
           <div className="mt-4 rounded-2xl bg-surface px-4 py-3">
             <p className="text-xs font-bold text-muted">Booking ID</p>
             <p className="text-lg font-extrabold text-primary-700">#{createdId.slice(-6)}</p>
             <p className="text-xs font-semibold text-muted">{sub?.name} • ₹{totalAmount.toLocaleString("en-IN")} • {payment.toUpperCase()}</p>
           </div>
+          {/* online payment step (dummy/test closed loop) */}
+          {!paidOnline && payment !== "cod" ? (
+            <div className="mt-4">
+              <RazorpayCheckout bookingId={createdId} amount={totalAmount} mobile={mobile} onSuccess={() => setPaidOnline(true)} />
+            </div>
+          ) : null}
           <div className="mt-5 grid gap-2">
             <Link href="/customer/dashboard" className="btn-primary w-full !py-3">Track in dashboard</Link>
             <button onClick={() => setCreatedId("")} className="btn-ghost w-full !py-3">Book another</button>

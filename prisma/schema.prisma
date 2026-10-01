@@ -188,6 +188,9 @@ model Booking {
   surgeAmount   Float         @default(0)
   visitingCharge Float        @default(0)
   totalAmount   Float
+  // Razorpay online-payment linkage (dummy/test or live)
+  razorpayOrderId   String?
+  razorpayPaymentId String?
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
   Lead          Lead[]
