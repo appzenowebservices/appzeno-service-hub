@@ -19,7 +19,8 @@ type Mode = "ask" | "blocked" | null;
  * Mounted globally from the root layout.
  */
 export default function FcmBootstrap() {
-  const { status } = useSession();
+  const { data: session, status } = useSession();
+  const role = (((session?.user as { role?: string } | undefined)?.role) ?? "").toUpperCase();
   const [mode, setMode] = useState<Mode>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -27,8 +28,14 @@ export default function FcmBootstrap() {
   const toastTimer = useRef<number | null>(null);
   const register = trpc.users.registerFcmToken.useMutation({
     onSuccess: (res: { ok?: boolean; reason?: string } | undefined) => {
-      console.log("[fcm] register result", res);
       if (res?.ok === false) {
+        if (res.reason === "no-db-user") {
+          // Env superadmin (and similar DB-less sessions) simply can't receive
+          // push — not an error for the user.
+          console.info("[fcm] push disabled for this session (no database account)");
+          window.localStorage.removeItem(PENDING_TOKEN_KEY);
+          return;
+        }
         setErr(`This session has no database account (${res.reason ?? "unknown"}) — log in as a real customer/vendor/agent to receive push.`);
       }
     },
@@ -44,8 +51,12 @@ export default function FcmBootstrap() {
   registerRef.current = register;
   const statusRef = useRef(status);
   statusRef.current = status;
+  const roleRef = useRef(role);
+  roleRef.current = role;
   const busyRef = useRef(false);
   const dismissedRef = useRef(false);
+
+  const isDbLessSession = useCallback(() => roleRef.current === "ADMIN", []);
 
   const saveToken = useCallback((token: string) => {
     if (statusRef.current === "authenticated") {
@@ -56,6 +67,12 @@ export default function FcmBootstrap() {
   }, []);
 
   const enable = useCallback(async () => {
+    if (isDbLessSession()) {
+      // Env superadmin has no DB row — skip silently instead of erroring.
+      setMode(null);
+      setErr(null);
+      return;
+    }
     if (busyRef.current) return;
     busyRef.current = true;
     setBusy(true);
@@ -85,18 +102,18 @@ export default function FcmBootstrap() {
       busyRef.current = false;
       setBusy(false);
     }
-  }, [saveToken]);
+  }, [isDbLessSession, saveToken]);
 
   // Register a token captured before the user signed in.
   useEffect(() => {
-    if (status !== "authenticated") return;
+    if (status !== "authenticated" || isDbLessSession()) return;
     const pending = window.localStorage.getItem(PENDING_TOKEN_KEY);
     if (!pending) return;
     register.mutate(
       { token: pending },
       { onSuccess: () => window.localStorage.removeItem(PENDING_TOKEN_KEY) },
     );
-  }, [status, register]);
+  }, [status, register, isDbLessSession]);
 
   // Decide what to show; re-checks when the tab regains focus, so enabling
   // notifications from browser settings updates the app without a reload.
@@ -104,6 +121,12 @@ export default function FcmBootstrap() {
     if (typeof window === "undefined" || !("Notification" in window)) return;
 
     const evaluate = () => {
+      if (isDbLessSession()) {
+        // Never prompt the env superadmin — it can't register a token.
+        setMode(null);
+        setErr(null);
+        return;
+      }
       if (Notification.permission === "granted") {
         setMode(null);
         setErr(null);
@@ -122,7 +145,7 @@ export default function FcmBootstrap() {
       window.removeEventListener("focus", evaluate);
       document.removeEventListener("visibilitychange", evaluate);
     };
-  }, [enable]);
+  }, [enable, isDbLessSession]);
 
   // Foreground pushes: show the OS notification AND an in-app popup. Chrome may
   // suppress the banner for regular (non-installed) tabs, so the popup is the

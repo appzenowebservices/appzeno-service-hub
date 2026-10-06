@@ -51,5 +51,8 @@ dev-server.log
 # idea files
 .idea
 
+# windows system junk
+desktop.ini
+
 # opencode session files (contain session tokens)
 oc.md

@@ -211,9 +211,17 @@ export default function LoginPage() {
                 type="text"
                 inputMode="tel"
                 autoComplete="username"
-                placeholder="e.g. 98765 43210"
+                placeholder="e.g. 9876543210"
                 value={mobile}
-                onChange={(e) => setMobile(e.target.value)}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  // Phone entry → digits only, max 10. Email entry stays as typed.
+                  if (raw === "" || /^\d/.test(raw)) {
+                    setMobile(raw.replace(/\D/g, "").slice(0, 10));
+                  } else {
+                    setMobile(raw);
+                  }
+                }}
                 className="input !py-3 !text-[15px]"
               />
             </div>
