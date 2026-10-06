@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { BadgeCheck, Loader2, ShieldCheck, Smartphone } from "lucide-react";
-import { confirmPhoneCode, startPhoneVerification } from "~/firebase/phone";
+import { confirmPhoneCode, phoneAuthErrorMessage, startPhoneVerification } from "~/firebase/phone";
 import { trpc } from "~/trpc/react";
 
 /**
@@ -43,7 +43,7 @@ export default function MobileVerifyCard({
       await startPhoneVerification(mobile, "addies-recaptcha");
       setStage("otp");
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Could not send the OTP. Try again.");
+      setErr(phoneAuthErrorMessage(e));
       setStage("idle");
     }
   };
@@ -55,7 +55,7 @@ export default function MobileVerifyCard({
       const idToken = await confirmPhoneCode(otp);
       verify.mutate({ idToken });
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Invalid or expired code.");
+      setErr(phoneAuthErrorMessage(e));
       setStage("otp");
     }
   };

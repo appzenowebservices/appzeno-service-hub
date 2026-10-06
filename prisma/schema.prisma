@@ -204,6 +204,20 @@ model Booking {
   updatedAt     DateTime      @updatedAt
   Lead          Lead[]
   Review        Review[]
+  events        BookingEvent[]
+}
+
+// Append-only lifecycle log so every role (incl. superadmin) can see the full
+// booking timeline with who did what and when.
+model BookingEvent {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  bookingId String   @db.ObjectId
+  booking   Booking  @relation(fields: [bookingId], references: [id])
+  status    String
+  actorRole String   @default("SYSTEM")
+  actorId   String?
+  note      String?
+  createdAt DateTime @default(now())
 }
 
 model Lead {

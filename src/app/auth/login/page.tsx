@@ -1,13 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { Eye, EyeOff, LogIn, ShieldCheck, UserCircle, Briefcase, Building2, Crown, Loader2, AlertCircle, ArrowLeft, BadgeCheck, Wallet, Star, CheckCircle2 } from "lucide-react";
-import { signIn, getSession } from "next-auth/react";
+import { Eye, EyeOff, LogIn, ShieldCheck, UserCircle, Briefcase, Building2, Crown, Loader2, AlertCircle, ArrowLeft, BadgeCheck, Wallet, Star, CheckCircle2, Smartphone } from "lucide-react";
+import { signIn, signOut, getSession } from "next-auth/react";
 import { useAuthStore } from "../../../../store/authStore";
 import { trpc } from "~/trpc/react";
+import { confirmPhoneCode, phoneAuthErrorMessage, startPhoneVerification } from "~/firebase/phone";
 
 const REMEMBER_KEY = "addies:remember-mobile";
 
@@ -22,6 +23,27 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [welcome, setWelcome] = useState<{ name: string; dest: string } | null>(null);
   const utils = trpc.useUtils();
+  const loginCheck = trpc.auth.login.useMutation();
+  const verifyOtpMutation = trpc.auth.verifyMobileOtp.useMutation();
+
+  // ── login-time mobile verification (Firebase Phone Auth OTP) ──
+  const [otpOpen, setOtpOpen] = useState(false);
+  const [otpCode, setOtpCode] = useState("");
+  const [otpSending, setOtpSending] = useState(false);
+  const [otpVerifying, setOtpVerifying] = useState(false);
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpErr, setOtpErr] = useState("");
+  const [resendIn, setResendIn] = useState(0);
+  const [otpMode, setOtpMode] = useState<"login" | "signup">("login");
+  const [otpDone, setOtpDone] = useState(false);
+  const otpBusyRef = useRef(false);
+  const pendingSendRef = useRef(false);
+
+  useEffect(() => {
+    if (resendIn <= 0) return;
+    const t = window.setTimeout(() => setResendIn((s) => s - 1), 1000);
+    return () => window.clearTimeout(t);
+  }, [resendIn]);
 
   useEffect(() => {
     const saved = window.localStorage.getItem(REMEMBER_KEY);
@@ -31,30 +53,8 @@ export default function LoginPage() {
     }
   }, []);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError("");
-    if (!mobile.trim() || !password.trim()) {
-      setError("Please enter mobile and password.");
-      return;
-    }
+  const proceedSignIn = async () => {
     setLoading(true);
-
-    // Pre-check credentials via tRPC first so we can tell "unverified email"
-    // apart from "wrong password" (NextAuth only returns a generic error).
-    // A failed pre-check does NOT stop the login: DB-unknown accounts (like
-    // the env-root superadmin) are decided by authorize() itself.
-    try {
-      const check = await utils.auth.login.fetch({ mobile: mobile.trim(), password });
-      if (!check.isVerified) {
-        setLoading(false);
-        setError("Please verify your email first — check your inbox for the confirmation link, then sign in.");
-        return;
-      }
-    } catch {
-      // fall through to signIn — authorize() is the final authority
-    }
-
     const result = await signIn("credentials", {
       redirect: false,
       mobile: mobile.trim(),
@@ -74,6 +74,15 @@ export default function LoginPage() {
     let role = (sUser?.role ?? "").toUpperCase();
     let userId = sUser?.id ?? "";
     let fullName = sUser?.name ?? "";
+
+    // Hard gate: an unverified mobile must never reach the dashboard. If the
+    // pre-check was bypassed (stale bundle, direct authorize), bounce back.
+    if (session && role !== "" && role !== "ADMIN" && !(sUser as { mobileVerified?: boolean } | undefined)?.mobileVerified) {
+      await signOut({ redirect: false });
+      setLoading(false);
+      openOtp("login");
+      return;
+    }
 
     // Fallback: fetch via public tRPC lookup if session race
     if (!role) {
@@ -116,6 +125,125 @@ export default function LoginPage() {
       router.push(dest);
       router.refresh();
     }, 1400);
+  };
+
+  const sendOtp = async () => {
+    if (otpBusyRef.current) return;
+    otpBusyRef.current = true;
+    setOtpErr("");
+    setOtpSending(true);
+    try {
+      await startPhoneVerification(mobile.trim(), "login-recaptcha");
+      setOtpSent(true);
+      setResendIn(30);
+    } catch (e) {
+      setOtpSent(false);
+      setOtpErr(phoneAuthErrorMessage(e));
+    } finally {
+      otpBusyRef.current = false;
+      setOtpSending(false);
+    }
+  };
+
+  // Fire the SMS once the panel (and its reCAPTCHA container) is mounted.
+  useEffect(() => {
+    if (otpOpen && pendingSendRef.current) {
+      pendingSendRef.current = false;
+      void sendOtp();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [otpOpen]);
+
+  const openOtp = (mode: "login" | "signup") => {
+    setOtpMode(mode);
+    setOtpOpen(true);
+    setOtpCode("");
+    setOtpErr("");
+    setOtpDone(false);
+    pendingSendRef.current = true;
+  };
+
+  const confirmOtp = async () => {
+    setOtpErr("");
+    setOtpVerifying(true);
+    try {
+      const idToken = await confirmPhoneCode(otpCode);
+      if (otpMode === "signup") {
+        // No DB account yet — the number is verified; continue to registration.
+        setOtpDone(true);
+        return;
+      }
+      await verifyOtpMutation.mutateAsync({ mobile: mobile.trim(), password, idToken });
+      setOtpOpen(false);
+      await proceedSignIn();
+    } catch (e) {
+      const code = (e as { code?: string } | null)?.code ?? "";
+      setOtpErr(code.startsWith("auth/") ? phoneAuthErrorMessage(e) : (e instanceof Error && e.message) || "Verification failed. Please try again.");
+    } finally {
+      setOtpVerifying(false);
+    }
+  };
+
+  const skipOtp = () => {
+    setOtpOpen(false);
+    setOtpErr("");
+    setOtpDone(false);
+    if (otpMode === "login") void proceedSignIn();
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+    if (!mobile.trim() || !password.trim()) {
+      setError("Please enter mobile and password.");
+      return;
+    }
+    setLoading(true);
+
+    // Ask the server why a login would fail so we can drive the right UX
+    // (env superadmin, blocked, wrong password, unverified email, unknown number).
+    try {
+      const check = await loginCheck.mutateAsync({ mobile: mobile.trim(), password });
+      if (!check.ok) {
+        setLoading(false);
+        if (check.reason === "ENV_ADMIN") {
+          // Env-root account (no DB password) — NextAuth authorize() decides.
+          await proceedSignIn();
+          return;
+        }
+        if (check.reason === "BLOCKED") {
+          setError(check.message ?? "Account blocked. Contact support.");
+          return;
+        }
+        if (check.reason === "EMAIL_UNVERIFIED") {
+          setError("Please verify your email first — check your inbox for the confirmation link, then sign in.");
+          return;
+        }
+        if (check.reason === "WRONG_PASSWORD") {
+          setError("Incorrect password. Please try again.");
+          return;
+        }
+        // NO_ACCOUNT: verify the number first (OTP), then continue to sign-up.
+        if (/^\d{10}$/.test(mobile.trim())) {
+          openOtp("signup");
+          return;
+        }
+        setError("No account found with these details. Tap “Join as customer” below to create one.");
+        return;
+      }
+
+      // Existing account with an unverified mobile → OTP, then sign in.
+      // Env superadmin (ADMIN) has no verifiable DB mobile, so it is skipped.
+      if (String(check.role).toUpperCase() !== "ADMIN" && check.mobileVerified === false) {
+        setLoading(false);
+        openOtp("login");
+        return;
+      }
+    } catch {
+      // Pre-check unavailable — let NextAuth decide.
+    }
+
+    await proceedSignIn();
   };
 
   const ROLE_HINTS = [
@@ -203,6 +331,80 @@ export default function LoginPage() {
           <h2 className="text-2xl font-extrabold tracking-tight text-ink sm:text-[28px]">Welcome back 👋</h2>
           <p className="sub mt-1.5">Sign in to track bookings, pay & rate your pro.</p>
 
+          {otpOpen ? (
+            <div className="mt-7">
+              <div className="card !p-5">
+                <div className="flex items-center gap-3">
+                  <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary-50 text-primary-600"><Smartphone size={20} /></span>
+                  <div className="min-w-0">
+                    <p className="font-extrabold text-ink">Verify your mobile</p>
+                    <p className="truncate text-xs font-medium text-muted">
+                      {otpDone
+                        ? `+91 ${mobile.trim()} is verified`
+                        : otpSent
+                          ? `Enter the 6-digit code sent to +91 ${mobile.trim()}`
+                          : otpMode === "signup"
+                            ? `No account for +91 ${mobile.trim()} yet — verify it to create one.`
+                            : `We'll SMS a code to +91 ${mobile.trim()}`}
+                    </p>
+                  </div>
+                </div>
+
+                {otpErr !== "" ? (
+                  <div className="mt-3 flex items-start gap-2 rounded-xl border border-danger/20 bg-danger-soft p-3 text-[13px] font-semibold text-danger">
+                    <AlertCircle size={15} className="mt-0.5 shrink-0" />
+                    {otpErr}
+                  </div>
+                ) : null}
+
+                {otpDone ? (
+                  <div className="mt-4">
+                    <p className="rounded-xl bg-success-soft px-3 py-2.5 text-[13px] font-bold text-success">
+                      ✓ Number verified — no account exists yet.
+                    </p>
+                    <Link href={`/auth/register?role=customer&mobile=${mobile.trim()}`} className="btn-primary mt-3 w-full !py-3">
+                      Create your account
+                    </Link>
+                  </div>
+                ) : !otpSent ? (
+                  <button onClick={() => { void sendOtp(); }} disabled={otpSending} className="btn-primary mt-4 w-full !py-3 disabled:opacity-50">
+                    {otpSending ? <><Loader2 size={16} className="animate-spin" /> Sending OTP…</> : <><Smartphone size={16} /> Send OTP</>}
+                  </button>
+                ) : (
+                  <>
+                    <div className="mt-4 flex gap-2">
+                      <input
+                        value={otpCode}
+                        onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                        inputMode="numeric"
+                        autoComplete="one-time-code"
+                        placeholder="••••••"
+                        className="input flex-1 !text-center !font-mono !text-lg !tracking-[0.4em]"
+                      />
+                      <button onClick={() => { void confirmOtp(); }} disabled={otpCode.length !== 6 || otpVerifying} className="btn-primary shrink-0 !px-5 disabled:opacity-50">
+                        {otpVerifying ? <Loader2 size={16} className="animate-spin" /> : <><BadgeCheck size={16} /> Verify</>}
+                      </button>
+                    </div>
+                    <div className="mt-3 flex items-center justify-between">
+                      <button onClick={() => { if (resendIn === 0 && !otpSending) void sendOtp(); }} disabled={otpSending || resendIn > 0} className="text-[12px] font-bold text-primary-600 hover:underline disabled:opacity-50">
+                        {otpSending ? "Sending…" : resendIn > 0 ? `Resend in ${resendIn}s` : "Resend OTP"}
+                      </button>
+                      <button onClick={() => { setOtpOpen(false); setOtpErr(""); }} className="text-[12px] font-bold text-muted hover:text-ink">← Use another account</button>
+                    </div>
+                  </>
+                )}
+
+                <div id="login-recaptcha" />
+              </div>
+
+              <button onClick={skipOtp} className="btn-ghost mt-3 w-full !py-3 !text-xs">
+                {otpMode === "login" ? "Skip for now — sign in without verifying" : "← Back to sign in"}
+              </button>
+              {otpMode === "login" && !otpDone ? (
+                <p className="mt-2 text-center text-[11px] font-medium text-muted">You can verify anytime from your dashboard.</p>
+              ) : null}
+            </div>
+          ) : (
           <form onSubmit={handleSubmit} className="mt-7 flex flex-col gap-4">
             <div>
               <label htmlFor="login-mobile" className="mb-1.5 block text-[13px] font-extrabold text-ink">Mobile number / Email</label>
@@ -273,6 +475,7 @@ export default function LoginPage() {
               {loading ? <><Loader2 size={17} className="animate-spin" /> Signing in…</> : <><LogIn size={17} /> Sign In</>}
             </button>
           </form>
+          )}
 
           <div className="mt-6 flex items-center gap-3 text-xs font-bold text-muted">
             <span className="h-px flex-1 bg-line" /> NEW TO ADDIES? <span className="h-px flex-1 bg-line" />

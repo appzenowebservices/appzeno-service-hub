@@ -49,3 +49,26 @@ export async function confirmPhoneCode(code: string): Promise<string> {
   }
   return credential.user.getIdToken();
 }
+
+const ERROR_MESSAGES: Record<string, string> = {
+  "auth/operation-not-allowed": "Phone verification isn't enabled for this project — enable the Phone sign-in provider in Firebase Console.",
+  "auth/billing-not-enabled": "SMS verification needs billing enabled on Firebase (Blaze plan).",
+  "auth/too-many-requests": "Too many attempts. Please wait a few minutes and try again.",
+  "auth/quota-exceeded": "SMS quota exceeded for now. Please try again later.",
+  "auth/invalid-phone-number": "This mobile number can't receive SMS. Please check it.",
+  "auth/invalid-verification-code": "Incorrect OTP — check the 6-digit code and try again.",
+  "auth/code-expired": "This OTP has expired. Request a new one.",
+  "auth/session-expired": "The verification session expired. Resend the OTP.",
+  "auth/captcha-check-failed": "Security check failed. Refresh the page and try again.",
+  "auth/missing-recaptcha-token": "Security check failed. Refresh the page and try again.",
+  "auth/network-request-failed": "Network error — check your connection and retry.",
+  "auth/operation-not-supported-in-this-environment": "This browser can't run SMS verification. Try Chrome or Edge.",
+};
+
+/** Maps Firebase Auth error codes (and generic errors) to user-facing text. */
+export function phoneAuthErrorMessage(error: unknown): string {
+  const code = (error as { code?: string } | null)?.code ?? "";
+  if (code && ERROR_MESSAGES[code]) return ERROR_MESSAGES[code];
+  if (error instanceof Error && error.message) return error.message;
+  return "Could not complete mobile verification. Please try again.";
+}

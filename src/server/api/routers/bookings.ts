@@ -1,6 +1,7 @@
 import { createTRPCRouter, protectedProcedure, adminProcedure } from "~/server/api/trpc";
 import { z } from "zod";
 import { notifyUser } from "~/server/notifications/notify";
+import { logBookingEvent } from "~/server/bookings/timeline";
 import { isObjectId } from "~/server/utils/object-id";
 import { TRPCError } from "@trpc/server";
 
@@ -55,6 +56,27 @@ export const bookingsRouter = createTRPCRouter({
         message: `Your booking ${booking.id.slice(-6)} has been placed`,
         actionUrl: "/customer/dashboard",
       });
+      await logBookingEvent(ctx.db, {
+        bookingId: booking.id,
+        status: "PENDING",
+        actorRole: "CUSTOMER",
+        actorId: customerId,
+        note: "Booking placed",
+      });
+      // area awareness: notify the agent(s) covering this pincode
+      const agents = await ctx.db.agentProfile.findMany({
+        where: { serviceAreaPincodes: { has: input.address.pincode } },
+        select: { userId: true },
+      });
+      for (const a of agents) {
+        await notifyUser(ctx.db, {
+          userId: a.userId,
+          type: "area",
+          title: "New booking in your area 📍",
+          message: `Booking #${booking.id.slice(-6)} in ${input.address.area} (${input.address.pincode}) is waiting for a pro.`,
+          actionUrl: "/agent",
+        });
+      }
       return booking;
     }),
 
@@ -118,15 +140,98 @@ export const bookingsRouter = createTRPCRouter({
       return { bookings, total };
     }),
 
+  /** Full 360° view for the ops console: participants, lifecycle, area agents. */
+  adminDetail: adminProcedure
+    .input(z.object({ id: z.string() }))
+    .query(async ({ ctx, input }) => {
+      if (!isObjectId(input.id)) return null;
+      const booking = await ctx.db.booking.findUnique({
+        where: { id: input.id },
+        include: {
+          customer: { select: { id: true, fullName: true, mobile: true, email: true, city: true } },
+          vendor: { select: { id: true, fullName: true, mobile: true, email: true, city: true, isVerified: true, vendorProfile: true } },
+          Review: { include: { customer: { select: { fullName: true } } } },
+          Lead: true,
+          events: { orderBy: { createdAt: "asc" } },
+        },
+      });
+      if (!booking) return null;
+      const pincode = (booking.address as { pincode?: string } | null)?.pincode ?? "";
+      const agents = pincode
+        ? await ctx.db.agentProfile.findMany({
+            where: { serviceAreaPincodes: { has: pincode } },
+            include: { user: { select: { id: true, fullName: true, mobile: true, city: true, isVerified: true } } },
+          })
+        : [];
+      return { booking, agents };
+    }),
+
   updateStatus: protectedProcedure
     .input(z.object({ id: z.string(), status: statusEnum }))
     .mutation(async ({ ctx, input }) => {
-      const prev = await ctx.db.booking.findUnique({ where: { id: input.id }, select: { status: true, categoryId: true } });
+      const prev = await ctx.db.booking.findUnique({
+        where: { id: input.id },
+        select: { status: true, categoryId: true, customerId: true, vendorId: true },
+      });
       const updated = await ctx.db.booking.update({ where: { id: input.id }, data: { status: input.status } });
+      await logBookingEvent(ctx.db, {
+        bookingId: input.id,
+        status: input.status,
+        actorRole: ((ctx.session.user as { role?: string }).role ?? "SYSTEM").toUpperCase(),
+        actorId: (ctx.session.user as { id: string }).id,
+      });
       // first transition to COMPLETED → credit the category's public booking counter
       if (input.status === "COMPLETED" && prev && prev.status !== "COMPLETED" && prev.categoryId) {
         const cat = await ctx.db.category.findFirst({ where: { OR: [{ id: prev.categoryId }, { slug: prev.categoryId }] } });
         if (cat) await ctx.db.category.update({ where: { id: cat.id }, data: { totalBookings: { increment: 1 } } });
+      }
+      // status-aware pushes to the affected parties
+      if (prev && prev.status !== input.status) {
+        const short = input.id.slice(-6);
+        if (input.status === "IN_PROGRESS" && prev.customerId) {
+          await notifyUser(ctx.db, {
+            userId: prev.customerId,
+            type: "booking",
+            title: "Work started 🛠️",
+            message: `Your pro has started working on booking #${short}.`,
+            actionUrl: "/customer/dashboard",
+          });
+        } else if (input.status === "COMPLETED" && prev.customerId) {
+          await notifyUser(ctx.db, {
+            userId: prev.customerId,
+            type: "booking",
+            title: "Booking completed 🎉",
+            message: `Work on booking #${short} is done. Please rate your pro!`,
+            actionUrl: "/customer/dashboard",
+          });
+        } else if (input.status === "CANCELLED") {
+          if (prev.customerId) {
+            await notifyUser(ctx.db, {
+              userId: prev.customerId,
+              type: "booking",
+              title: "Booking cancelled",
+              message: `Booking #${short} was cancelled.`,
+              actionUrl: "/customer/dashboard",
+            });
+          }
+          if (prev.vendorId) {
+            await notifyUser(ctx.db, {
+              userId: prev.vendorId,
+              type: "booking",
+              title: "Job cancelled",
+              message: `Booking #${short} was cancelled.`,
+              actionUrl: "/vendor",
+            });
+          }
+        } else if (input.status === "DISPUTED" && prev.vendorId) {
+          await notifyUser(ctx.db, {
+            userId: prev.vendorId,
+            type: "booking",
+            title: "Dispute raised ⚠️",
+            message: `A dispute was raised on booking #${short}. Our team will reach out.`,
+            actionUrl: "/vendor",
+          });
+        }
       }
       return updated;
     }),
@@ -146,12 +251,28 @@ export const bookingsRouter = createTRPCRouter({
           status: "pending",
         },
       });
+      const vendorUser = await ctx.db.user.findUnique({ where: { id: input.vendorId }, select: { fullName: true } });
+      await logBookingEvent(ctx.db, {
+        bookingId: input.id,
+        status: "ASSIGNED",
+        actorRole: "ADMIN",
+        actorId: (ctx.session.user as { id: string }).id,
+        note: `Assigned to ${vendorUser?.fullName ?? "vendor"}`,
+      });
       await notifyUser(ctx.db, {
         userId: input.vendorId,
         type: "lead",
         title: "New lead assigned",
         message: `New booking ${input.id.slice(-6)} assigned to you`,
         actionUrl: "/vendor",
+      });
+      // keep the customer in the loop
+      await notifyUser(ctx.db, {
+        userId: booking.customerId,
+        type: "booking",
+        title: "Pro assigned 👷",
+        message: `A verified pro has been assigned to booking #${input.id.slice(-6)}. Awaiting their confirmation.`,
+        actionUrl: "/customer/dashboard",
       });
       return booking;
     }),
@@ -170,6 +291,21 @@ export const bookingsRouter = createTRPCRouter({
       if (profile) {
         await ctx.db.vendorProfile.update({ where: { id: profile.id }, data: { rating: avg, totalReviews: all.length } });
       }
+      // let the pro know they got rated
+      await notifyUser(ctx.db, {
+        userId: input.vendorId,
+        type: "review",
+        title: `New review ⭐ ${input.rating}/5`,
+        message: input.comment?.trim() ? `"${input.comment.trim().slice(0, 80)}"` : "A customer rated your work.",
+        actionUrl: "/vendor",
+      });
+      await logBookingEvent(ctx.db, {
+        bookingId: input.bookingId,
+        status: "REVIEWED",
+        actorRole: "CUSTOMER",
+        actorId: customerId,
+        note: `Rated ${input.rating}★`,
+      });
       return review;
     }),
 });

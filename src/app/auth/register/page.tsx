@@ -88,6 +88,13 @@ function RegisterForm() {
   const [role, setRole] = useState<Role>(initialRole);
   const [fullName, setFullName] = useState("");
   const [mobile, setMobile] = useState("");
+
+  // Prefill the mobile when arriving from the login OTP verification flow.
+  useEffect(() => {
+    const pre = sp.get("mobile") ?? "";
+    if (/^\d{10}$/.test(pre)) setMobile((m) => (m === "" ? pre : m));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");

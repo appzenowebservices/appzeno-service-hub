@@ -2,6 +2,7 @@ import { createTRPCRouter, publicProcedure, protectedProcedure, adminProcedure }
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { notifyUser } from "~/server/notifications/notify";
+import { logBookingEvent } from "~/server/bookings/timeline";
 
 export const vendorsRouter = createTRPCRouter({
   getPublicProfile: publicProcedure
@@ -297,8 +298,33 @@ export const vendorsRouter = createTRPCRouter({
         throw new TRPCError({ code: "BAD_REQUEST", message: "Lead already handled" });
       }
       await ctx.db.lead.update({ where: { id: input.leadId }, data: { status: input.accept ? "accepted" : "declined" } });
+      await logBookingEvent(ctx.db, {
+        bookingId: lead.bookingId,
+        status: input.accept ? "ACCEPTED" : "DECLINED",
+        actorRole: "VENDOR",
+        actorId: userId,
+        note: input.accept ? "Accepted by pro" : "Declined by pro",
+      });
+      // Notify the customer about the pro's decision (in-app + push).
+      const short = lead.bookingId.slice(-6);
       if (input.accept) {
         await ctx.db.booking.update({ where: { id: lead.bookingId }, data: { status: "ACCEPTED" } });
+        const vendorName = (ctx.session.user as { name?: string }).name ?? "Your pro";
+        await notifyUser(ctx.db, {
+          userId: lead.booking.customerId,
+          type: "booking",
+          title: "Booking accepted ✅",
+          message: `${vendorName} accepted booking #${short} and will arrive as scheduled.`,
+          actionUrl: "/customer/dashboard",
+        });
+      } else {
+        await notifyUser(ctx.db, {
+          userId: lead.booking.customerId,
+          type: "booking",
+          title: "Finding another pro…",
+          message: `Your pro couldn't take booking #${short}. We're assigning another verified pro.`,
+          actionUrl: "/customer/dashboard",
+        });
       }
       return { accepted: input.accept, bookingId: lead.bookingId };
     }),

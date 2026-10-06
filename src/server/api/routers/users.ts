@@ -118,9 +118,18 @@ export const usersRouter = createTRPCRouter({
   getByMobile: publicProcedure
     .input(z.object({ mobile: z.string() }))
     .query(async ({ ctx, input }) => {
+      // Public lookup — never expose passwordHash or other secrets.
       return ctx.db.user.findUnique({
         where: { mobile: input.mobile },
-        include: {
+        select: {
+          id: true,
+          mobile: true,
+          role: true,
+          fullName: true,
+          city: true,
+          isVerified: true,
+          isActive: true,
+          mobileVerified: true,
           customerProfile: true,
           vendorProfile: true,
           agentProfile: true,

@@ -91,6 +91,7 @@ export const authConfig = {
           mobile: user.mobile,
           role: user.role,
           city: user.city,
+          mobileVerified: user.mobileVerified,
         } as unknown as { id: string; name: string };
       },
     }),
@@ -107,6 +108,7 @@ export const authConfig = {
         token.mobile = user.mobile;
         token.role = user.role;
         token.city = user.city;
+        token.mobileVerified = (user as { mobileVerified?: boolean }).mobileVerified ?? false;
         token.name = user.name ?? token.name;
       }
       return token;
@@ -118,6 +120,7 @@ export const authConfig = {
         session.user.mobile = token.mobile as string;
         session.user.role = token.role as string;
         session.user.city = token.city as string;
+        session.user.mobileVerified = Boolean(token.mobileVerified);
       }
       return session;
     },

@@ -71,6 +71,10 @@ export async function sendPushToUser(db: Db, userId: string, payload: PushPayloa
       },
     });
 
+    if (res.failureCount > 0 || process.env.NODE_ENV === "development") {
+      console.log(`[fcm] "${payload.title}" → ${res.successCount} delivered, ${res.failureCount} failed`);
+    }
+
     const stale: string[] = [];
     res.responses.forEach((r, i) => {
       if (!r.success && STALE_TOKEN_CODES.has(r.error?.code ?? "")) {

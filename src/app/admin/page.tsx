@@ -9,6 +9,7 @@ import {
   LayoutDashboard, UserCheck, CalendarClock, Store, Users, MapPinned, Tags, Wallet,
   Megaphone, Search, Check, Ban, RefreshCw, Plus, LogOut, IndianRupee, TrendingUp,
   Clock, AlertTriangle, Star, ExternalLink, Receipt, Send, Globe, ChevronRight, Bell, Loader2,
+  CheckCircle2, XCircle, X, Wrench, MapPin, Phone, UserCircle,
 } from "lucide-react";
 import { trpc } from "~/trpc/react";
 import { generateReactHelpers } from "@uploadthing/react";
@@ -53,8 +54,7 @@ interface VendorRow {
   id: string; fullName: string; mobile: string; city: string; isActive: boolean; isVerified: boolean;
   vendorProfile?: { businessName: string; kycStatus: string; isApproved: boolean; subscriptionPlan: string; rating: number; totalReviews: number; serviceCategories: string[]; yearsOfExperience: number; gst?: string | null; aadhaarDoc?: string | null; panDoc?: string | null; profilePhoto?: string | null } | null;
 }
-interface BookingRow {
-  id: string; status: string; paymentStatus: string; totalAmount: number; description: string;
+interface BookingRow {  id: string; status: string; paymentStatus: string; totalAmount: number; description: string;
   customer?: { fullName: string; mobile: string } | null;
   vendor?: { id: string; fullName: string } | null;
 }
@@ -66,6 +66,52 @@ interface AgentRow { id: string; fullName: string; mobile: string; city: string;
 interface CatRow { id: string; slug: string; name: string; icon: string; image?: string | null; rating: number; totalBookings: number; isFeatured: boolean; sortOrder: number; isActive: boolean; commissionPercent: number; subCategories: { id: string; name: string; basePrice: number; unit: string }[] }
 interface TxRow { id: string; type: string; amount: number; description: string; balanceAfter: number; createdAt: string | Date; user: { fullName: string; mobile: string; role: string } }
 interface NotifRow { id: string; title: string; message: string; type: string; createdAt: string | Date; image?: string | null }
+
+interface DetailData {
+  booking: {
+    id: string;
+    status: string;
+    paymentStatus: string;
+    paymentMethod: string;
+    description: string;
+    preferredDate: string;
+    timeSlot?: { label?: string } | null;
+    address?: { houseNo?: string; area?: string; pincode?: string; city?: string; landmark?: string } | null;
+    baseAmount: number;
+    surgeAmount: number;
+    visitingCharge: number;
+    totalAmount: number;
+    createdAt: string | Date;
+    customer?: { fullName: string; mobile: string; email?: string | null; city?: string } | null;
+    vendor?: { id: string; fullName: string; mobile: string; email?: string | null; city?: string; isVerified?: boolean; vendorProfile?: { businessName?: string; rating?: number; totalReviews?: number; kycStatus?: string; isApproved?: boolean } | null } | null;
+    Review?: { rating: number; comment?: string | null; createdAt: string | Date }[];
+    Lead?: { status: string; expiresAt: string | Date; createdAt: string | Date }[];
+    events?: { id: string; status: string; actorRole: string; note?: string | null; createdAt: string | Date }[];
+  };
+  agents: { id: string; assignedCity: string; serviceAreaPincodes: string[]; user?: { fullName: string; mobile: string; city?: string; isVerified?: boolean } | null }[];
+}
+
+const EVENT_META: Record<string, { cls: string; ring: string }> = {
+  PENDING: { cls: "bg-accent-400", ring: "ring-accent-200" },
+  ASSIGNED: { cls: "bg-primary-600", ring: "ring-primary-200" },
+  ACCEPTED: { cls: "bg-primary-600", ring: "ring-primary-200" },
+  IN_PROGRESS: { cls: "bg-primary-600", ring: "ring-primary-200" },
+  COMPLETED: { cls: "bg-success", ring: "ring-success/30" },
+  REVIEWED: { cls: "bg-accent-400", ring: "ring-accent-200" },
+  CANCELLED: { cls: "bg-slate-400", ring: "ring-slate-200" },
+  DECLINED: { cls: "bg-slate-400", ring: "ring-slate-200" },
+  DISPUTED: { cls: "bg-danger", ring: "ring-danger/30" },
+};
+
+function eventIcon(status: string) {
+  if (status === "COMPLETED" || status === "ACCEPTED") return CheckCircle2;
+  if (status === "IN_PROGRESS") return Wrench;
+  if (status === "CANCELLED" || status === "DECLINED") return XCircle;
+  if (status === "DISPUTED") return AlertTriangle;
+  if (status === "REVIEWED") return Star;
+  if (status === "ASSIGNED") return UserCircle;
+  return Clock;
+}
 
 function inr(n: number): string {
   return `₹${Math.round(n).toLocaleString("en-IN")}`;
@@ -244,6 +290,7 @@ export default function AdminPage() {
   const [bImage, setBImage] = useState("");
   const [bLink, setBLink] = useState("");
   const [bNote, setBNote] = useState("");
+  const [detailId, setDetailId] = useState<string | null>(null);
   const [newCat, setNewCat] = useState({ name: "", icon: "🔧", commission: "10", description: "" });
   const [subForm, setSubForm] = useState({ catId: "", name: "", price: "", unit: "per job" });
   const [catSearch, setCatSearch] = useState("");
@@ -279,7 +326,7 @@ export default function AdminPage() {
   const catsQ = trpc.categories.getAll.useQuery({ includeInactive: true }, { enabled: authed && tab === "categories" });
   const walletQ = trpc.admin.walletTx.useQuery({ limit: 25 }, { enabled: authed && tab === "finance" });
   const notifsQ = trpc.admin.notifications.useQuery({ limit: 10 }, { enabled: authed && tab === "broadcast" });
-  const areasQ = trpc.areas.getAll.useQuery(undefined, { enabled: authed && tab === "areas" });
+  const detailQ = trpc.bookings.adminDetail.useQuery({ id: detailId ?? "" }, { enabled: authed && !!detailId });  const areasQ = trpc.areas.getAll.useQuery(undefined, { enabled: authed && tab === "areas" });
 
   const refreshAll = () => {
     void utils.invalidate();
@@ -650,6 +697,7 @@ export default function AdminPage() {
                           <p className="mt-0.5 text-xs text-muted">{b.customer?.fullName ?? "—"} ({b.customer?.mobile ?? "—"}) → {b.vendor?.fullName ?? <b className="text-accent-600">unassigned</b>}</p>
                         </div>
                         <div className="flex flex-wrap items-center gap-1.5">
+                          <button onClick={() => setDetailId(b.id)} className="btn-ghost !px-3 !py-1.5 !text-xs"><Clock size={13} /> Timeline</button>
                           <select
                             value={statusSel[b.id] ?? b.status}
                             onChange={(e) => setStatusSel((p) => ({ ...p, [b.id]: e.target.value }))}
@@ -704,6 +752,113 @@ export default function AdminPage() {
               )}
             </div>
           )}
+
+          {/* ══════════ BOOKING DETAIL — per-role 360° (timeline + participants) ══════════ */}
+          {detailId ? (
+            <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-ink/60 p-4 backdrop-blur-sm" onClick={() => setDetailId(null)}>
+              <div className="my-6 w-full max-w-3xl rounded-3xl bg-white p-5 shadow-pop" onClick={(e) => e.stopPropagation()}>
+                {detailQ.isLoading || !detailQ.data ? (
+                  <div className="py-10 text-center text-sm font-bold text-muted">Loading booking…</div>
+                ) : (() => {
+                  const d = detailQ.data as unknown as DetailData;
+                  const b = d.booking;
+                  const addr = b.address ?? {};
+                  return (
+                    <>
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-lg font-extrabold tracking-tight text-ink">Booking #{b.id.slice(-6)}</p>
+                          <p className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted">
+                            <Chip value={b.status} /> <Chip value={b.paymentStatus} /> {inr(b.totalAmount)} • {b.paymentMethod?.toUpperCase()} • placed {new Date(b.createdAt).toLocaleString("en-IN")}
+                          </p>
+                        </div>
+                        <button onClick={() => setDetailId(null)} aria-label="Close" className="rounded-full p-2 text-muted hover:bg-surface hover:text-ink"><X size={18} /></button>
+                      </div>
+
+                      <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                        <div className="rounded-2xl border border-line p-3">
+                          <p className="mb-1.5 flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-wider text-muted"><UserCircle size={13} /> Customer</p>
+                          <p className="text-sm font-bold text-ink">{b.customer?.fullName ?? "—"}</p>
+                          <p className="text-xs text-muted">{b.customer?.mobile ?? "—"}{b.customer?.city ? ` • ${b.customer.city}` : ""}</p>
+                          {b.customer?.email ? <p className="truncate text-[11px] text-muted">{b.customer.email}</p> : null}
+                        </div>
+                        <div className="rounded-2xl border border-line p-3">
+                          <p className="mb-1.5 flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-wider text-muted"><Store size={13} /> Vendor</p>
+                          {b.vendor ? (
+                            <>
+                              <p className="truncate text-sm font-bold text-ink">{b.vendor.vendorProfile?.businessName ?? b.vendor.fullName}</p>
+                              <p className="text-xs text-muted">{b.vendor.fullName} • {b.vendor.mobile}</p>
+                              <p className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] font-bold">
+                                <span className={b.vendor.isVerified ? "chip chip-success" : "chip chip-neutral"}>{b.vendor.isVerified ? "verified" : "unverified"}</span>
+                                {typeof b.vendor.vendorProfile?.rating === "number" ? <span className="chip chip-accent">★ {b.vendor.vendorProfile.rating.toFixed(1)} ({b.vendor.vendorProfile.totalReviews ?? 0})</span> : null}
+                                {b.vendor.vendorProfile?.kycStatus ? <span className="chip chip-neutral">KYC {b.vendor.vendorProfile.kycStatus}</span> : null}
+                              </p>
+                            </>
+                          ) : <p className="text-sm font-bold text-accent-600">Unassigned</p>}
+                        </div>
+                        <div className="rounded-2xl border border-line p-3">
+                          <p className="mb-1.5 flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-wider text-muted"><MapPinned size={13} /> Area agent(s)</p>
+                          {d.agents.length === 0 ? (
+                            <p className="text-xs text-muted">No agent covers {addr.pincode ?? "this pincode"}.</p>
+                          ) : (
+                            d.agents.map((a) => (
+                              <p key={a.id} className="text-xs text-body"><b className="text-ink">{a.user?.fullName ?? "Agent"}</b> • {a.user?.mobile ?? "—"} {a.user?.isVerified ? "✅" : "⏳"}</p>
+                            ))
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="mt-5">
+                        <p className="mb-2 text-[11px] font-extrabold uppercase tracking-wider text-muted">Lifecycle timeline</p>
+                        {(b.events ?? []).length === 0 ? (
+                          <p className="text-xs text-muted">No events logged yet.</p>
+                        ) : (
+                          (b.events ?? []).map((ev, i, arr) => {
+                            const meta = EVENT_META[ev.status] ?? EVENT_META.PENDING!;
+                            const Icon = eventIcon(ev.status);
+                            return (
+                              <div key={ev.id} className="flex gap-3">
+                                <div className="flex flex-col items-center">
+                                  <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-white ring-4 ${meta.cls} ${meta.ring}`}><Icon size={13} /></span>
+                                  {i < arr.length - 1 ? <span className="w-px flex-1 bg-line" /> : null}
+                                </div>
+                                <div className="pb-4">
+                                  <p className="text-[13px] font-extrabold text-ink">{ev.status.replace(/_/g, " ")} <span className="chip chip-neutral ml-1">{ev.actorRole}</span></p>
+                                  {ev.note ? <p className="text-xs text-body">{ev.note}</p> : null}
+                                  <p className="text-[11px] text-muted">{new Date(ev.createdAt).toLocaleString("en-IN")}</p>
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+
+                      <div className="mt-2 grid gap-3 sm:grid-cols-2">
+                        <div className="rounded-2xl bg-surface p-3">
+                          <p className="mb-1.5 text-[11px] font-extrabold uppercase tracking-wider text-muted"><MapPin size={12} className="mr-1 inline" /> Service address</p>
+                          <p className="text-xs text-body">{[addr.houseNo, addr.area, addr.city, addr.pincode].filter(Boolean).join(", ") || "—"}</p>
+                          {addr.landmark ? <p className="text-[11px] text-muted">Landmark: {addr.landmark}</p> : null}
+                          <p className="mt-1 text-[11px] text-muted">Schedule: {b.preferredDate} {b.timeSlot?.label ? `• ${b.timeSlot.label}` : ""}</p>
+                        </div>
+                        <div className="rounded-2xl bg-surface p-3">
+                          <p className="mb-1.5 text-[11px] font-extrabold uppercase tracking-wider text-muted">Payment & amounts</p>
+                          <p className="text-xs text-body">Base {inr(b.baseAmount)} + surge {inr(b.surgeAmount)} + visiting {inr(b.visitingCharge)} = <b className="text-ink">{inr(b.totalAmount)}</b></p>
+                          <p className="mt-1 text-[11px] text-muted">{b.paymentMethod?.toUpperCase()} • {b.paymentStatus}</p>
+                          {b.Lead?.[0] ? <p className="mt-1 text-[11px] text-muted">Lead: {b.Lead[0].status} (expires {new Date(b.Lead[0].expiresAt).toLocaleTimeString("en-IN")})</p> : null}
+                          {b.Review?.[0] ? <p className="mt-1 text-[11px] font-semibold text-accent-600">Review: ★ {b.Review[0].rating}{b.Review[0].comment ? ` — "${b.Review[0].comment}"` : ""}</p> : null}
+                        </div>
+                      </div>
+
+                      <div className="mt-4 rounded-2xl border border-line p-3">
+                        <p className="mb-1 text-[11px] font-extrabold uppercase tracking-wider text-muted">Customer&apos;s request</p>
+                        <p className="text-[13px] text-body">{b.description}</p>
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+            </div>
+          ) : null}
 
           {/* ══════════ VENDORS ══════════ */}
           {tab === "vendors" && (
@@ -1234,7 +1389,8 @@ export default function AdminPage() {
                 <input value={bTitle} onChange={(e) => setBTitle(e.target.value)} placeholder="Title — e.g. Diwali dhamaka: 20% off deep cleaning" className="input mb-2" />
                 <textarea value={bMsg} onChange={(e) => setBMsg(e.target.value)} placeholder="Message — keep it short, add expiry if it's an offer" className="input mb-2" rows={4} />
                 <input value={bLink} onChange={(e) => setBLink(e.target.value)} placeholder="Click link (optional) — /services or https://…" className="input mb-2" />
-                <input value={bImage} onChange={(e) => setBImage(e.target.value)} placeholder="Image URL (optional) — https://…/banner.jpg" className="input mb-3" />
+                <input value={bImage} onChange={(e) => setBImage(e.target.value)} placeholder="Image URL (optional) — https://…/banner.jpg" className="input mb-1" />
+                <p className="mb-3 text-[10px] font-medium text-muted">Phones/PWAs need a public <b>https</b> image URL; relative paths resolve against NEXT_PUBLIC_APP_URL (localhost works on desktop only).</p>
 
                 {/* live push preview */}
                 {(bTitle.trim() !== "" || bMsg.trim() !== "" || bImage.trim() !== "") ? (

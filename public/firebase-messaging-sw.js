@@ -5,6 +5,11 @@
 importScripts("https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js");
 importScripts("https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js");
 
+// Take over immediately on update — otherwise a stale worker (without image
+// support) keeps serving on installed PWAs until every window is closed.
+self.addEventListener("install", () => self.skipWaiting());
+self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
+
 firebase.initializeApp({
   apiKey: "AIzaSyA5I4jP9syPQ5-hTyEcgPxjdCiKq13kvos",
   authDomain: "service-hub-df5e3.firebaseapp.com",
