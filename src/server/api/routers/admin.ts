@@ -1,7 +1,8 @@
 import { createTRPCRouter, adminProcedure, protectedProcedure } from "~/server/api/trpc";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { sendPushToUsers } from "~/server/notifications/notify";
+import { sendPushToUser, sendPushToUsers } from "~/server/notifications/notify";
+import { resolveDbUserId } from "~/server/utils/db-user";
 
 const CATALOG: { slug: string; name: string; icon: string; description: string; commissionPercent: number; rating: number; totalBookings: number; sortOrder: number; image?: string; featured?: boolean; subs: { name: string; basePrice: number; unit: string }[] }[] = [
   { slug: "home-cleaning", name: "Home Cleaning", icon: "🧹", description: "Kitchen, sofa, full-home packages", commissionPercent: 15, rating: 4.82, totalBookings: 12400, sortOrder: 1, image: "/images/hero/home-cleaning.png", featured: true, subs: [{ name: "1BHK deep cleaning", basePrice: 1999, unit: "per home" }, { name: "2BHK deep cleaning", basePrice: 2999, unit: "per home" }, { name: "Sofa + carpet shampoo", basePrice: 899, unit: "per set" }] },
@@ -17,6 +18,12 @@ const CATALOG: { slug: string; name: string; icon: string; description: string; 
   { slug: "painting", name: "Painting & Waterproofing", icon: "🎨", description: "Full home, single room, waterproofing", commissionPercent: 10, rating: 4.74, totalBookings: 3200, sortOrder: 11, subs: [{ name: "1BHK repaint", basePrice: 9999, unit: "per home" }, { name: "Waterproofing (bathroom)", basePrice: 2499, unit: "per bathroom" }] },
   { slug: "pest-control", name: "Pest Control", icon: "🛡️", description: "Cockroach, termite, mosquito", commissionPercent: 15, rating: 4.78, totalBookings: 8600, sortOrder: 12, subs: [{ name: "Cockroach control (1BHK)", basePrice: 1099, unit: "per home" }, { name: "Termite treatment", basePrice: 2499, unit: "per home" }] },
 ];
+
+/** Trims an optional string field, treating blank as "not set". */
+function clean(v?: string): string | null {
+  const t = v?.trim() ?? "";
+  return t === "" ? null : t;
+}
 
 export const adminRouter = createTRPCRouter({
   stats: adminProcedure.query(async ({ ctx }) => {
@@ -272,23 +279,69 @@ export const adminRouter = createTRPCRouter({
     }),
 
   broadcast: adminProcedure
-    .input(z.object({ role: z.enum(["CUSTOMER", "VENDOR", "AGENT"]).optional(), title: z.string(), message: z.string() }))
+    .input(
+      z.object({
+        role: z.enum(["CUSTOMER", "VENDOR", "AGENT"]).optional(),
+        title: z.string().min(1),
+        message: z.string().min(1),
+        actionUrl: z.string().optional(),
+        imageUrl: z.string().optional(),
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
       const users = await ctx.db.user.findMany({
         where: input.role ? { role: input.role } : {},
         select: { id: true },
         take: 500,
       });
+      const image = clean(input.imageUrl);
+      const action = clean(input.actionUrl);
       await ctx.db.notification.createMany({
         data: users.map((u) => ({
           userId: u.id,
           type: "system",
           title: input.title,
           message: input.message,
+          actionUrl: action,
+          image,
         })),
       });
-      // Fan the same message out as device push notifications.
-      await sendPushToUsers(ctx.db, users.map((u) => u.id), { title: input.title, body: input.message, url: "/" });
+      // Fan the same message out as fully customised device pushes.
+      await sendPushToUsers(ctx.db, users.map((u) => u.id), {
+        title: input.title,
+        body: input.message,
+        url: action ?? "/",
+        image,
+      });
+      console.log(`[fcm] broadcast${input.role ? ` to ${input.role}` : ""} — ${users.length} user(s), image: ${image ? "yes" : "no"}, link: ${action ?? "/"}`);
       return { sent: users.length };
+    }),
+
+  /** Sends a one-off custom push to the calling admin's own devices (preview). */
+  sendTestPush: adminProcedure
+    .input(
+      z.object({
+        title: z.string().min(1),
+        message: z.string().min(1),
+        actionUrl: z.string().optional(),
+        imageUrl: z.string().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const sessionUser = ctx.session.user as { id: string; mobile?: string };
+      const id = await resolveDbUserId(ctx.db, sessionUser);
+      if (!id) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "No DB account for this session — run prisma/ensure-superadmin.mjs." });
+      }
+      const user = await ctx.db.user.findUnique({ where: { id }, select: { fcmTokens: true } });
+      const devices = user?.fcmTokens.length ?? 0;
+      await sendPushToUser(ctx.db, id, {
+        title: input.title,
+        body: input.message,
+        url: clean(input.actionUrl) ?? "/",
+        image: clean(input.imageUrl),
+      });
+      console.log(`[fcm] test push to admin ${id} — ${devices} device(s)`);
+      return { ok: true, devices };
     }),
 });

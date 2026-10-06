@@ -63,6 +63,9 @@ model User {
   passwordHash      String?
   // FCM registration tokens for web push (one per browser/device)
   fcmTokens         String[]  @default([])
+  // Mobile number verified via Firebase Phone Auth (SMS OTP)
+  mobileVerified    Boolean   @default(false)
+  mobileVerifiedAt  DateTime?
 
   customerProfile   CustomerProfile?
   vendorProfile     VendorProfile?
@@ -247,6 +250,7 @@ model Notification {
   message   String
   isRead    Boolean  @default(false)
   actionUrl String?
+  image     String?
   createdAt DateTime @default(now())
 }
 

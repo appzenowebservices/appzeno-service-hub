@@ -65,7 +65,7 @@ interface UserRow {
 interface AgentRow { id: string; fullName: string; mobile: string; city: string; isVerified: boolean; commissionPercent: number; cityBookings: number; cityGmv: number; commissionEarned: number }
 interface CatRow { id: string; slug: string; name: string; icon: string; image?: string | null; rating: number; totalBookings: number; isFeatured: boolean; sortOrder: number; isActive: boolean; commissionPercent: number; subCategories: { id: string; name: string; basePrice: number; unit: string }[] }
 interface TxRow { id: string; type: string; amount: number; description: string; balanceAfter: number; createdAt: string | Date; user: { fullName: string; mobile: string; role: string } }
-interface NotifRow { id: string; title: string; message: string; type: string; createdAt: string | Date }
+interface NotifRow { id: string; title: string; message: string; type: string; createdAt: string | Date; image?: string | null }
 
 function inr(n: number): string {
   return `₹${Math.round(n).toLocaleString("en-IN")}`;
@@ -241,6 +241,9 @@ export default function AdminPage() {
   const [bTitle, setBTitle] = useState("");
   const [bMsg, setBMsg] = useState("");
   const [bRole, setBRole] = useState<"CUSTOMER" | "VENDOR" | "AGENT" | undefined>(undefined);
+  const [bImage, setBImage] = useState("");
+  const [bLink, setBLink] = useState("");
+  const [bNote, setBNote] = useState("");
   const [newCat, setNewCat] = useState({ name: "", icon: "🔧", commission: "10", description: "" });
   const [subForm, setSubForm] = useState({ catId: "", name: "", price: "", unit: "per job" });
   const [catSearch, setCatSearch] = useState("");
@@ -303,6 +306,10 @@ export default function AdminPage() {
   const updateComm = trpc.admin.updateAgentCommission.useMutation({ onSuccess: () => void agentsQ.refetch() });
   const remindKyc = trpc.vendors.remindKyc.useMutation({ onSuccess: () => alert("Reminder sent to the vendor's notifications.") });
   const broadcast = trpc.admin.broadcast.useMutation({ onSuccess: () => void notifsQ.refetch() });
+  const sendTestPush = trpc.admin.sendTestPush.useMutation({
+    onSuccess: (d) => setBNote(d.devices > 0 ? `✓ Test push sent to ${d.devices} of your device(s).` : "No devices registered for your account — enable notifications in the app first."),
+    onError: (e) => setBNote(`Test failed: ${e.message}`),
+  });
 
   const stats = statsQ.data as StatsData | undefined;
   const vendors = useMemo(() => ((vendorsQ.data as { vendors?: VendorRow[] } | undefined)?.vendors ?? []), [vendorsQ.data]);
@@ -1217,7 +1224,7 @@ export default function AdminPage() {
             <div className="grid gap-3 lg:grid-cols-2">
               <Card>
                 <p className="mb-1 font-extrabold text-ink">Broadcast notification</p>
-                <p className="sub mb-4">Push an in-app notice to a whole role — offers, outages, policy changes.</p>
+                <p className="sub mb-4">Send a fully customised push — title, message, image and click link — to a whole role.</p>
                 <div className="mb-3 flex gap-2">
                   {(["CUSTOMER", "VENDOR", "AGENT"] as const).map((r) => (
                     <button key={r} onClick={() => setBRole(bRole === r ? undefined : r)} className={`tab-pill !text-xs ${bRole === r ? "tab-pill-active" : "tab-pill-idle"}`}>{r}</button>
@@ -1225,19 +1232,57 @@ export default function AdminPage() {
                   <button onClick={() => setBRole(undefined)} className={`tab-pill !text-xs ${bRole === undefined ? "tab-pill-active" : "tab-pill-idle"}`}>ALL</button>
                 </div>
                 <input value={bTitle} onChange={(e) => setBTitle(e.target.value)} placeholder="Title — e.g. Diwali dhamaka: 20% off deep cleaning" className="input mb-2" />
-                <textarea value={bMsg} onChange={(e) => setBMsg(e.target.value)} placeholder="Message — keep it short, add expiry if it's an offer" className="input mb-3" rows={4} />
-                <button
-                  disabled={bTitle.trim() === "" || bMsg.trim() === "" || broadcast.isPending}
-                  onClick={() => {
-                    broadcast.mutate(
-                      { title: bTitle.trim(), message: bMsg.trim(), role: bRole ?? undefined },
-                      { onSuccess: (d) => { setBTitle(""); setBMsg(""); alert(`Sent to ${d.sent} users`); } },
-                    );
-                  }}
-                  className="btn-accent w-full disabled:opacity-50"
-                >
-                  <Send size={15} /> {broadcast.isPending ? "Sending…" : `Send${bRole ? ` to ${bRole}` : " to everyone"}`}
-                </button>
+                <textarea value={bMsg} onChange={(e) => setBMsg(e.target.value)} placeholder="Message — keep it short, add expiry if it's an offer" className="input mb-2" rows={4} />
+                <input value={bLink} onChange={(e) => setBLink(e.target.value)} placeholder="Click link (optional) — /services or https://…" className="input mb-2" />
+                <input value={bImage} onChange={(e) => setBImage(e.target.value)} placeholder="Image URL (optional) — https://…/banner.jpg" className="input mb-3" />
+
+                {/* live push preview */}
+                {(bTitle.trim() !== "" || bMsg.trim() !== "" || bImage.trim() !== "") ? (
+                  <div className="mb-3 rounded-2xl border border-line bg-surface p-3">
+                    <p className="mb-2 text-[10px] font-extrabold uppercase tracking-widest text-muted">Push preview</p>
+                    <div className="overflow-hidden rounded-xl border border-line bg-white">
+                      {bImage.trim() !== "" ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={bImage.trim()} alt="" className="h-28 w-full object-cover" />
+                      ) : null}
+                      <div className="flex items-start gap-2.5 p-3">
+                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary-50 text-primary-600"><Bell size={14} /></span>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-[13px] font-extrabold text-ink">{bTitle.trim() || "Title"}</p>
+                          <p className="mt-0.5 line-clamp-2 text-[12px] text-body">{bMsg.trim() || "Message"}</p>
+                          {bLink.trim() !== "" ? <p className="mt-1 truncate text-[10px] font-semibold text-primary-600">↗ {bLink.trim()}</p> : null}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    disabled={bTitle.trim() === "" || bMsg.trim() === "" || sendTestPush.isPending}
+                    onClick={() => {
+                      setBNote("");
+                      sendTestPush.mutate({ title: bTitle.trim(), message: bMsg.trim(), actionUrl: bLink.trim() || undefined, imageUrl: bImage.trim() || undefined });
+                    }}
+                    className="btn-ghost disabled:opacity-50"
+                  >
+                    <Bell size={15} /> {sendTestPush.isPending ? "Sending…" : "Test to me"}
+                  </button>
+                  <button
+                    disabled={bTitle.trim() === "" || bMsg.trim() === "" || broadcast.isPending}
+                    onClick={() => {
+                      setBNote("");
+                      broadcast.mutate(
+                        { title: bTitle.trim(), message: bMsg.trim(), role: bRole ?? undefined, actionUrl: bLink.trim() || undefined, imageUrl: bImage.trim() || undefined },
+                        { onSuccess: (d) => { setBTitle(""); setBMsg(""); setBLink(""); setBImage(""); setBNote(`✓ Broadcast sent to ${d.sent} user(s).`); } },
+                      );
+                    }}
+                    className="btn-accent disabled:opacity-50"
+                  >
+                    <Send size={15} /> {broadcast.isPending ? "Sending…" : `Send${bRole ? ` to ${bRole}` : " to everyone"}`}
+                  </button>
+                </div>
+                {bNote !== "" ? <p className="mt-2 text-[11px] font-bold text-primary-700">{bNote}</p> : null}
               </Card>
               <Card>
                 <p className="mb-3 font-extrabold text-ink">Latest notifications on platform</p>
@@ -1248,6 +1293,10 @@ export default function AdminPage() {
                     <div key={n.id} className="row-line !py-2.5">
                       <p className="text-sm font-extrabold text-ink">{n.title} <span className="chip chip-neutral ml-1">{n.type}</span></p>
                       <p className="mt-0.5 text-[13px] text-body">{n.message}</p>
+                      {n.image ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={n.image} alt="" className="mt-2 h-20 w-full max-w-[240px] rounded-xl object-cover" />
+                      ) : null}
                     </div>
                   ))
                 )}

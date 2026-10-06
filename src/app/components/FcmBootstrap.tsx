@@ -19,19 +19,18 @@ type Mode = "ask" | "blocked" | null;
  * Mounted globally from the root layout.
  */
 export default function FcmBootstrap() {
-  const { data: session, status } = useSession();
-  const role = (((session?.user as { role?: string } | undefined)?.role) ?? "").toUpperCase();
+  const { status } = useSession();
   const [mode, setMode] = useState<Mode>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [toast, setToast] = useState<{ title: string; body: string; url: string } | null>(null);
+  const [toast, setToast] = useState<{ title: string; body: string; url: string; image?: string } | null>(null);
   const toastTimer = useRef<number | null>(null);
   const register = trpc.users.registerFcmToken.useMutation({
     onSuccess: (res: { ok?: boolean; reason?: string } | undefined) => {
       if (res?.ok === false) {
         if (res.reason === "no-db-user") {
-          // Env superadmin (and similar DB-less sessions) simply can't receive
-          // push — not an error for the user.
+          // No DB row to attach tokens to (e.g. env superadmin before
+          // `node prisma/ensure-superadmin.mjs` has been run) — not a user error.
           console.info("[fcm] push disabled for this session (no database account)");
           window.localStorage.removeItem(PENDING_TOKEN_KEY);
           return;
@@ -51,12 +50,8 @@ export default function FcmBootstrap() {
   registerRef.current = register;
   const statusRef = useRef(status);
   statusRef.current = status;
-  const roleRef = useRef(role);
-  roleRef.current = role;
   const busyRef = useRef(false);
   const dismissedRef = useRef(false);
-
-  const isDbLessSession = useCallback(() => roleRef.current === "ADMIN", []);
 
   const saveToken = useCallback((token: string) => {
     if (statusRef.current === "authenticated") {
@@ -67,12 +62,6 @@ export default function FcmBootstrap() {
   }, []);
 
   const enable = useCallback(async () => {
-    if (isDbLessSession()) {
-      // Env superadmin has no DB row — skip silently instead of erroring.
-      setMode(null);
-      setErr(null);
-      return;
-    }
     if (busyRef.current) return;
     busyRef.current = true;
     setBusy(true);
@@ -102,18 +91,18 @@ export default function FcmBootstrap() {
       busyRef.current = false;
       setBusy(false);
     }
-  }, [isDbLessSession, saveToken]);
+  }, [saveToken]);
 
   // Register a token captured before the user signed in.
   useEffect(() => {
-    if (status !== "authenticated" || isDbLessSession()) return;
+    if (status !== "authenticated") return;
     const pending = window.localStorage.getItem(PENDING_TOKEN_KEY);
     if (!pending) return;
     register.mutate(
       { token: pending },
       { onSuccess: () => window.localStorage.removeItem(PENDING_TOKEN_KEY) },
     );
-  }, [status, register, isDbLessSession]);
+  }, [status, register]);
 
   // Decide what to show; re-checks when the tab regains focus, so enabling
   // notifications from browser settings updates the app without a reload.
@@ -121,12 +110,6 @@ export default function FcmBootstrap() {
     if (typeof window === "undefined" || !("Notification" in window)) return;
 
     const evaluate = () => {
-      if (isDbLessSession()) {
-        // Never prompt the env superadmin — it can't register a token.
-        setMode(null);
-        setErr(null);
-        return;
-      }
       if (Notification.permission === "granted") {
         setMode(null);
         setErr(null);
@@ -145,7 +128,7 @@ export default function FcmBootstrap() {
       window.removeEventListener("focus", evaluate);
       document.removeEventListener("visibilitychange", evaluate);
     };
-  }, [enable, isDbLessSession]);
+  }, [enable]);
 
   // Foreground pushes: show the OS notification AND an in-app popup. Chrome may
   // suppress the banner for regular (non-installed) tabs, so the popup is the
@@ -155,8 +138,9 @@ export default function FcmBootstrap() {
       const title = payload.notification?.title ?? payload.data?.title ?? "ADDies";
       const body = payload.notification?.body ?? payload.data?.body ?? "";
       const url = payload.data?.url ?? payload.fcmOptions?.link ?? "/";
-      void showLocalNotification({ title, body, url });
-      setToast({ title, body, url });
+      const image = payload.notification?.image ?? payload.data?.image ?? undefined;
+      void showLocalNotification({ title, body, url, image });
+      setToast({ title, body, url, image });
       if (toastTimer.current) window.clearTimeout(toastTimer.current);
       toastTimer.current = window.setTimeout(() => setToast(null), 8000);
     });
@@ -179,23 +163,27 @@ export default function FcmBootstrap() {
           <button
             type="button"
             onClick={() => { setToast(null); window.location.href = toast.url; }}
-            className="flex w-full items-start gap-3 rounded-2xl border border-line bg-white p-4 text-left shadow-pop transition-transform hover:scale-[1.01]"
+            className="w-full overflow-hidden rounded-2xl border border-line bg-white text-left shadow-pop transition-transform hover:scale-[1.01]"
           >
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary-50 text-primary-600"><BellRing size={16} /></span>
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-extrabold text-ink">{toast.title}</p>
-              <p className="mt-0.5 line-clamp-2 text-[12px] font-medium text-body">{toast.body}</p>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            {toast.image ? <img src={toast.image} alt="" className="h-28 w-full object-cover" /> : null}
+            <div className="flex items-start gap-3 p-4">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary-50 text-primary-600"><BellRing size={16} /></span>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-extrabold text-ink">{toast.title}</p>
+                <p className="mt-0.5 line-clamp-2 text-[12px] font-medium text-body">{toast.body}</p>
+              </div>
+              <span
+                role="button"
+                tabIndex={0}
+                aria-label="Dismiss"
+                onClick={(e) => { e.stopPropagation(); setToast(null); }}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); setToast(null); } }}
+                className="shrink-0 rounded-full p-1.5 text-muted hover:bg-surface hover:text-ink"
+              >
+                <X size={15} />
+              </span>
             </div>
-            <span
-              role="button"
-              tabIndex={0}
-              aria-label="Dismiss"
-              onClick={(e) => { e.stopPropagation(); setToast(null); }}
-              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); setToast(null); } }}
-              className="shrink-0 rounded-full p-1.5 text-muted hover:bg-surface hover:text-ink"
-            >
-              <X size={15} />
-            </span>
           </button>
         </div>
       ) : null}

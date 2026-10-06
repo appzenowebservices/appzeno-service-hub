@@ -7,6 +7,7 @@ interface PushPayload {
   title: string;
   body: string;
   url?: string | null;
+  image?: string | null;
 }
 
 interface NotifyInput {
@@ -15,6 +16,7 @@ interface NotifyInput {
   title: string;
   message: string;
   actionUrl?: string | null;
+  image?: string | null;
 }
 
 const STALE_TOKEN_CODES = new Set([
@@ -42,17 +44,19 @@ export async function sendPushToUser(db: Db, userId: string, payload: PushPayloa
   if (tokens.length === 0) return;
 
   const link = absoluteUrl(payload.url);
+  const image = absoluteUrl(payload.image);
 
   try {
     const res = await messaging.sendEachForMulticast({
       tokens,
       // `notification` gives browsers an auto-display fallback; `data` lets our
       // service worker and foreground handler render it consistently.
-      notification: { title: payload.title, body: payload.body },
+      notification: { title: payload.title, body: payload.body, ...(image ? { image } : {}) },
       data: {
         title: payload.title,
         body: payload.body,
         ...(payload.url ? { url: payload.url } : {}),
+        ...(image ? { image } : {}),
       },
       webpush: {
         headers: { Urgency: "high" },
@@ -61,6 +65,7 @@ export async function sendPushToUser(db: Db, userId: string, payload: PushPayloa
           body: payload.body,
           icon: "/icons/icon-192.png",
           badge: "/icons/icon-192.png",
+          ...(image ? { image } : {}),
         },
         ...(link ? { fcmOptions: { link } } : {}),
       },
@@ -94,17 +99,23 @@ export async function notifyUser(db: Db, input: NotifyInput): Promise<void> {
       title: input.title,
       message: input.message,
       actionUrl: input.actionUrl ?? null,
+      image: input.image ?? null,
     },
   });
   await sendPushToUser(db, input.userId, {
     title: input.title,
     body: input.message,
     url: input.actionUrl ?? null,
+    image: input.image ?? null,
   });
 }
 
 /** Fans a push out to many users (used by admin broadcasts). */
-export async function sendPushToUsers(db: Db, userIds: string[], base: { title: string; body: string; url?: string | null }): Promise<void> {
+export async function sendPushToUsers(
+  db: Db,
+  userIds: string[],
+  base: { title: string; body: string; url?: string | null; image?: string | null },
+): Promise<void> {
   if (userIds.length === 0) return;
   const users = await db.user.findMany({
     where: { id: { in: userIds }, fcmTokens: { isEmpty: false } },

@@ -1,4 +1,4 @@
-import { getApp, getApps, initializeApp } from "firebase/app";
+import { getApp, getApps, initializeApp, type FirebaseApp } from "firebase/app";
 import {
   getMessaging,
   getToken,
@@ -35,13 +35,24 @@ let messaging: Messaging | null = null;
 
 const noop = () => undefined;
 
+/** Single Firebase app instance shared by messaging and phone auth. */
+export function getFirebaseApp(): FirebaseApp | null {
+  if (!isFirebaseConfigured()) return null;
+  try {
+    return getApps().length ? getApp() : initializeApp(firebaseConfig);
+  } catch {
+    return null;
+  }
+}
+
 export function getFirebaseMessaging(): Messaging | null {
   if (typeof window === "undefined") return null;
   if (!isFirebaseConfigured()) return null;
   if (!("Notification" in window) || !("serviceWorker" in navigator)) return null;
   if (messaging) return messaging;
+  const app = getFirebaseApp();
+  if (!app) return null;
   try {
-    const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
     messaging = getMessaging(app);
     return messaging;
   } catch {
@@ -95,7 +106,7 @@ export async function requestFcmToken(): Promise<string | null> {
  * Shows a notification via the service worker — the reliable path. `new Notification()`
  * is ignored/blocked in several browsers, so use this for foreground messages too.
  */
-export async function showLocalNotification(payload: { title: string; body: string; url?: string }): Promise<void> {
+export async function showLocalNotification(payload: { title: string; body: string; url?: string; image?: string }): Promise<void> {
   if (typeof window === "undefined" || !("serviceWorker" in navigator) || !("Notification" in window)) return;
   if (Notification.permission !== "granted") return;
   try {
@@ -104,6 +115,7 @@ export async function showLocalNotification(payload: { title: string; body: stri
       body: payload.body,
       icon: "/icons/icon-192.png",
       badge: "/icons/icon-192.png",
+      ...(payload.image ? { image: payload.image } : {}),
       data: { url: payload.url ?? "/" },
     });
   } catch (error) {

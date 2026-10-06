@@ -1,6 +1,9 @@
 import { createTRPCRouter, publicProcedure, protectedProcedure, adminProcedure } from "~/server/api/trpc";
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { isObjectId } from "~/server/utils/object-id";
+import { resolveDbUserId } from "~/server/utils/db-user";
+import { getFirebaseAdminAuth } from "~/server/firebase/admin";
 
 export const usersRouter = createTRPCRouter({
   getById: protectedProcedure
@@ -32,9 +35,10 @@ export const usersRouter = createTRPCRouter({
   registerFcmToken: protectedProcedure
     .input(z.object({ token: z.string().min(20) }))
     .mutation(async ({ ctx, input }) => {
-      const id = (ctx.session.user as { id: string }).id;
-      if (!isObjectId(id)) {
-        console.warn(`[fcm] register skipped — session ${id} has no DB user (env superadmin?)`);
+      const sessionUser = ctx.session.user as { id: string; mobile?: string };
+      const id = await resolveDbUserId(ctx.db, sessionUser);
+      if (!id) {
+        console.warn(`[fcm] register skipped — no DB user for session ${sessionUser.id} (mobile: ${sessionUser.mobile ?? "none"})`);
         return { ok: false, reason: "no-db-user" };
       }
       const user = await ctx.db.user.findUnique({ where: { id }, select: { fcmTokens: true } });
@@ -59,7 +63,9 @@ export const usersRouter = createTRPCRouter({
   removeFcmToken: protectedProcedure
     .input(z.object({ token: z.string().min(20) }))
     .mutation(async ({ ctx, input }) => {
-      const id = (ctx.session.user as { id: string }).id;
+      const sessionUser = ctx.session.user as { id: string; mobile?: string };
+      const id = await resolveDbUserId(ctx.db, sessionUser);
+      if (!id) return { ok: false, reason: "no-db-user" };
       const user = await ctx.db.user.findUnique({ where: { id }, select: { fcmTokens: true } });
       const tokens = user?.fcmTokens ?? [];
       await ctx.db.user.update({
@@ -67,6 +73,46 @@ export const usersRouter = createTRPCRouter({
         data: { fcmTokens: { set: tokens.filter((t) => t !== input.token) } },
       });
       return { ok: true };
+    }),
+
+  /**
+   * Marks the session user's mobile verified after a Firebase Phone Auth OTP
+   * confirmation. The client sends the Firebase ID token; we verify it here and
+   * require its phone_number to match the account mobile.
+   */
+  verifyMobile: protectedProcedure
+    .input(z.object({ idToken: z.string().min(20) }))
+    .mutation(async ({ ctx, input }) => {
+      const sessionUser = ctx.session.user as { id: string; mobile?: string };
+      const id = await resolveDbUserId(ctx.db, sessionUser);
+      if (!id) throw new TRPCError({ code: "NOT_FOUND", message: "No database account for this session." });
+
+      const auth = getFirebaseAdminAuth();
+      if (!auth) {
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Firebase admin is not configured (FIREBASE_SERVICE_ACCOUNT_KEY)." });
+      }
+
+      let decoded;
+      try {
+        decoded = await auth.verifyIdToken(input.idToken);
+      } catch {
+        throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid or expired verification token." });
+      }
+
+      const norm = (v: string) => v.replace(/\D/g, "").slice(-10);
+      const phone = norm(decoded.phone_number ?? "");
+      const user = await ctx.db.user.findUnique({ where: { id }, select: { mobile: true } });
+      const mine = norm(user?.mobile ?? "");
+      if (!phone || phone !== mine) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "The verified number does not match your account mobile." });
+      }
+
+      await ctx.db.user.update({
+        where: { id },
+        data: { mobileVerified: true, mobileVerifiedAt: new Date() },
+      });
+      console.log(`[auth] mobile verified for ${id} (${phone})`);
+      return { ok: true, phone };
     }),
 
   getByMobile: publicProcedure

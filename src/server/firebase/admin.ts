@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { cert, getApp, getApps, initializeApp, type App } from "firebase-admin/app";
+import { getAuth, type Auth } from "firebase-admin/auth";
 import { getMessaging, type Messaging } from "firebase-admin/messaging";
-import { env } from "~/env";
 
 interface ServiceAccountShape {
   project_id?: string;
@@ -35,7 +35,10 @@ export function getFirebaseAdminApp(): App | null {
     return app;
   }
 
-  const sa = parseServiceAccount(env.FIREBASE_SERVICE_ACCOUNT_KEY);
+  // Read straight from process.env: the t3-env `env` object returns an empty
+  // value for this long var in the server bundle (same pitfall as client vars).
+  // The service account accepts raw JSON, base64 JSON, or a path to JSON.
+  const sa = parseServiceAccount(process.env.FIREBASE_SERVICE_ACCOUNT_KEY);
   if (!sa?.client_email || !sa.private_key) {
     console.warn("[fcm] Firebase admin not configured — push notifications disabled");
     return null;
@@ -44,7 +47,7 @@ export function getFirebaseAdminApp(): App | null {
   try {
     app = initializeApp({
       credential: cert({
-        projectId: sa.project_id ?? env.FIREBASE_PROJECT_ID,
+        projectId: sa.project_id ?? process.env.FIREBASE_PROJECT_ID,
         clientEmail: sa.client_email,
         privateKey: sa.private_key.replace(/\\n/g, "\n"),
       }),
@@ -61,6 +64,17 @@ export function getFirebaseAdminMessaging(): Messaging | null {
   if (!adminApp) return null;
   try {
     return getMessaging(adminApp);
+  } catch {
+    return null;
+  }
+}
+
+/** Verifies Firebase Phone Auth ID tokens (used for mobile verification). */
+export function getFirebaseAdminAuth(): Auth | null {
+  const adminApp = getFirebaseAdminApp();
+  if (!adminApp) return null;
+  try {
+    return getAuth(adminApp);
   } catch {
     return null;
   }

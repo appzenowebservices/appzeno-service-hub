@@ -24,12 +24,14 @@ messaging.onBackgroundMessage((payload) => {
   const title = note.title || data.title || "ADDies";
   const body = note.body || data.body || "";
   const icon = note.icon || "/icons/icon-192.png";
+  const image = note.image || data.image || undefined;
   const url = data.url || payload?.fcmOptions?.link || "/";
 
   self.registration.showNotification(title, {
     body,
     icon,
     badge: "/icons/icon-192.png",
+    ...(image ? { image } : {}),
     data: { url },
   });
 });

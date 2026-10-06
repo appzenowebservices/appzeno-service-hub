@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { trpc } from "~/trpc/react";
 import BrandedLoader from "~/app/components/common/BrandedLoader";
+import MobileVerifyCard from "~/app/components/common/MobileVerifyCard";
 
 type Tab = "overview" | "bookings" | "notifications";
 
@@ -51,7 +52,7 @@ function inr(n: number): string {
   return `₹${Math.round(n).toLocaleString("en-IN")}`;
 }
 
-interface NotifRow { id: string; title: string; message: string; isRead: boolean; createdAt: string | Date }
+interface NotifRow { id: string; title: string; message: string; isRead: boolean; createdAt: string | Date; image?: string | null; actionUrl?: string | null }
 
 function relTime(d: string | Date): string {
   const m = Math.floor((Date.now() - new Date(d).getTime()) / 60000);
@@ -133,7 +134,7 @@ export default function CustomerDashboard() {
   const notifQ = trpc.admin.notifications.useQuery({ limit: 10 }, { enabled: !!customerId && status === "authenticated" });
   const markRead = trpc.admin.markNotificationRead.useMutation({ onSuccess: () => notifQ.refetch() });
 
-  const me = meQ.data as { fullName?: string; mobile?: string; city?: string; customerProfile?: { walletBalance: number; referralCode?: string | null } | null } | undefined;
+  const me = meQ.data as { fullName?: string; mobile?: string; city?: string; mobileVerified?: boolean; customerProfile?: { walletBalance: number; referralCode?: string | null } | null } | undefined;
   const bookings = useMemo(() => ((bookingsQ.data as BookingRow[] | undefined) ?? []), [bookingsQ.data]);
   const cats = (catsQ.data as Cat[] | undefined) ?? [];
   const notifications = useMemo(() => ((notifQ.data as NotifRow[] | undefined) ?? []), [notifQ.data]);
@@ -157,6 +158,10 @@ export default function CustomerDashboard() {
             <span className="shrink-0 text-[10px] font-semibold text-muted">{relTime(n.createdAt)}</span>
           </div>
           <p className="mt-0.5 line-clamp-2 text-[13px] text-body">{n.message}</p>
+          {n.image ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={n.image} alt="" className="mt-2 h-24 w-full rounded-xl object-cover" />
+          ) : null}
         </div>
       </button>
     );
@@ -322,6 +327,11 @@ export default function CustomerDashboard() {
                   </div>
                 ))}
               </div>
+
+              {/* mobile verification (Firebase Phone Auth OTP) */}
+              {me?.mobile ? (
+                <MobileVerifyCard mobile={me.mobile} verified={Boolean(me.mobileVerified)} onVerified={() => { void meQ.refetch(); }} />
+              ) : null}
 
               {/* quick book */}
               <div className="card">
