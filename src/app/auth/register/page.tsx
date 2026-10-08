@@ -62,20 +62,16 @@ const ROLE_COPY: Record<Role, { badge: string; title: string; accent: string; su
 
 const POINT_ICONS = [BadgeCheck, Wallet, ShieldCheck];
 
-// OmniPost mailing lists — new signups are subscribed here on registration (see below).
-const AGENT_LIST_ID = "bdeb0103-2a84-4f0d-91ac-2ad99cc3c8c8";
-const VENDOR_LIST_ID = "33158e14-a7e2-4de8-a485-88271adac9f8";
-const CUSTOMER_LIST_ID = "353d86bf-26a5-4a92-a8a4-37186e656ad1";
-const AGENT_SUBSCRIBE_URL = "https://omnipost.appzenowebservices.com/subscription/form";
-
-async function subscribeMailingList(email: string, name: string, listId: string): Promise<void> {
-  const fd = new FormData();
-  fd.append("email", email);
-  fd.append("name", name);
-  fd.append("l", listId);
-  fd.append("nonce", "");
+// Mailing-list subscribes go through our own API (/api/updates/join), which
+// routes to the right Patra list by signup source and keeps the Patra host
+// server-side (no CORS, no hardcoded list UUIDs in the client).
+async function subscribeMailingList(email: string, name: string, source: string): Promise<void> {
   // fire-and-forget: subscription must never block registration
-  await fetch(AGENT_SUBSCRIBE_URL, { method: "POST", body: fd, mode: "no-cors" });
+  await fetch("/api/updates/join", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, name, source }),
+  });
 }
 
 function RegisterForm() {
@@ -180,13 +176,13 @@ function RegisterForm() {
       // never after login: new accounts are unverified so the auto-signIn below
       // is expected to fail, and must not gate the subscription.
       if (role === "AGENT" && em !== "" && agentNews) {
-        subscribeMailingList(em, fullName.trim(), AGENT_LIST_ID).catch(() => undefined);
+        subscribeMailingList(em, fullName.trim(), "agent_registration").catch(() => undefined);
       }
       if (role === "VENDOR" && em !== "" && vendorNews) {
-        subscribeMailingList(em, fullName.trim(), VENDOR_LIST_ID).catch(() => undefined);
+        subscribeMailingList(em, fullName.trim(), "vendor_registration").catch(() => undefined);
       }
       if (role === "CUSTOMER" && em !== "" && customerNews) {
-        subscribeMailingList(em, fullName.trim(), CUSTOMER_LIST_ID).catch(() => undefined);
+        subscribeMailingList(em, fullName.trim(), "customer_registration").catch(() => undefined);
       }
       const r = await signIn("credentials", { redirect: false, mobile: mobile.trim(), password });
       // NOTE: subscribes fire BEFORE the auto-login below on purpose — new

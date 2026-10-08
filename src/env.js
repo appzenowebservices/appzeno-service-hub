@@ -16,6 +16,12 @@ export const env = createEnv({
     OMNIPOST_AGENT_LIST_UUIDS: z.string().optional(),
     OMNIPOST_VENDOR_LIST_UUIDS: z.string().optional(),
     OMNIPOST_CUSTOMER_LIST_UUIDS: z.string().optional(),
+    // Public newsletter list targeted by /api/updates/join (site + signups).
+    OMNIPOST_PUBLIC_LIST_UUIDS: z.string().optional(),
+    // Server-to-server subscribe calls to Patra. OMNIPOST_BASE_URLS (CSV) is
+    // tried first, then OMNIPOST_BASE_URL, then docker/loopback/public defaults.
+    OMNIPOST_BASE_URL: z.string().optional(),
+    OMNIPOST_BASE_URLS: z.string().optional(),
     RAZORPAY_KEY_ID: z.string().optional(),
     RAZORPAY_KEY_SECRET: z.string().optional(),
     // Firebase Admin (FCM web push). SERVICE_ACCOUNT_KEY = base64 of the
@@ -56,6 +62,9 @@ export const env = createEnv({
     OMNIPOST_AGENT_LIST_UUIDS: process.env.OMNIPOST_AGENT_LIST_UUIDS,
     OMNIPOST_VENDOR_LIST_UUIDS: process.env.OMNIPOST_VENDOR_LIST_UUIDS,
     OMNIPOST_CUSTOMER_LIST_UUIDS: process.env.OMNIPOST_CUSTOMER_LIST_UUIDS,
+    OMNIPOST_PUBLIC_LIST_UUIDS: process.env.OMNIPOST_PUBLIC_LIST_UUIDS,
+    OMNIPOST_BASE_URL: process.env.OMNIPOST_BASE_URL,
+    OMNIPOST_BASE_URLS: process.env.OMNIPOST_BASE_URLS,
     RAZORPAY_KEY_ID: process.env.RAZORPAY_KEY_ID,
     RAZORPAY_KEY_SECRET: process.env.RAZORPAY_KEY_SECRET,
     FIREBASE_PROJECT_ID: process.env.FIREBASE_PROJECT_ID,

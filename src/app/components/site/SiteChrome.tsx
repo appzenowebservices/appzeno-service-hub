@@ -1,5 +1,6 @@
 import Image from "next/image";
 import Link from "next/link";
+import NewsletterForm from "./NewsletterForm";
 
 export function SiteHeader({ active }: { active?: string }) {
   const links = [
@@ -40,6 +41,7 @@ export function SiteFooter() {
           <p className="font-extrabold text-ink">ADDies Service Hub</p>
           <p className="sub mt-2 !text-[13px]">Ghar ka har kaam — verified experts, upfront pricing, warranty. Live in 10 cities.</p>
           <p className="mt-3 inline-flex items-center gap-2"><span className="chip chip-primary">54 services</span><span className="chip chip-accent">4.8★ rated</span></p>
+          <NewsletterForm />
         </div>
         <div>
           <p className="mb-3 text-xs font-extrabold uppercase tracking-wider text-muted">Company</p>
