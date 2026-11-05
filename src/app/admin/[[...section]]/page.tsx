@@ -102,7 +102,7 @@ const STATUS_STYLE: Record<string, string> = {
 };
 
 interface StatsData {
-  totalRevenue: number; platformFee: number; totalBookings: number; completedBookings: number;
+  totalRevenue: number; platformFee: number; totalBookings: number; completedBookings: number; totalCategories: number;
   customers: number; vendors: number; agents: number; pendingKyc: number; openDisputes: number;
   pendingBookings: number; walletTransactions: number; areas: number;
   avgOrderValue: number; todayCount: number; walletLiability: number;
@@ -128,7 +128,7 @@ interface UserRow {
 }
 interface AgentRow { id: string; fullName: string; mobile: string; email?: string | null; mobileVerified?: boolean; city: string; isVerified: boolean; commissionPercent: number; cityBookings: number; cityGmv: number; commissionEarned: number; pincodes: string[] }
 interface CatRow { id: string; slug: string; name: string; icon: string; image?: string | null; rating: number; totalBookings: number; isFeatured: boolean; sortOrder: number; isActive: boolean; commissionPercent: number; subCategories: { id: string; name: string; basePrice: number; unit: string }[] }
-interface TxRow { id: string; type: string; amount: number; description: string; balanceAfter: number; createdAt: string | Date; user: { fullName: string; mobile: string; role: string } }
+interface TxRow { id: string; type: string; amount: number; description: string; balanceAfter: number; createdAt: string | Date; user: { fullName: string; mobile: string; role: string } | null }
 interface NotifRow { id: string; title: string; message: string; type: string; createdAt: string | Date; image?: string | null }
 
 interface DetailData {
@@ -1649,7 +1649,7 @@ export default function AdminPage() {
                     <div key={t.id} className="row-line flex flex-wrap items-center justify-between gap-2 !py-2.5 text-sm">
                       <div>
                         <p className="font-bold text-ink">{t.description}</p>
-                        <p className="text-xs text-muted">{t.user.fullName} ({t.user.mobile}) • {t.type} • bal {inr(t.balanceAfter)}</p>
+                        <p className="text-xs text-muted">{t.user ? `${t.user.fullName} (${t.user.mobile})` : "Deleted user"} • {t.type} • bal {inr(t.balanceAfter)}</p>
                       </div>
                       <span className={`font-extrabold ${t.type === "credit" ? "text-success" : "text-danger"}`}>{t.type === "credit" ? "+" : "−"}{inr(t.amount)}</span>
                     </div>

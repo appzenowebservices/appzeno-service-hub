@@ -436,11 +436,23 @@ export const adminRouter = createTRPCRouter({
   walletTx: adminProcedure
     .input(z.object({ limit: z.number().min(1).max(100).default(20) }))
     .query(async ({ ctx, input }) => {
-      return ctx.db.walletTransaction.findMany({
+      // Do not `include: { user: true }` here: legacy rows can reference users
+      // that no longer exist, and Prisma throws "Field user is required to
+      // return data, got null" for the whole query. Resolve users separately so
+      // one orphan cannot break the finance ledger.
+      const txs = await ctx.db.walletTransaction.findMany({
         take: input.limit,
         orderBy: { createdAt: "desc" },
-        include: { user: { select: { fullName: true, mobile: true, role: true } } },
       });
+      const userIds = [...new Set(txs.map((t) => t.userId))];
+      const users = userIds.length
+        ? await ctx.db.user.findMany({
+            where: { id: { in: userIds } },
+            select: { id: true, fullName: true, mobile: true, role: true },
+          })
+        : [];
+      const byId = new Map(users.map((u) => [u.id, u]));
+      return txs.map((t) => ({ ...t, user: byId.get(t.userId) ?? null }));
     }),
 
   refundBooking: adminProcedure
