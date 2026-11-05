@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import {
   LayoutDashboard, Briefcase, Inbox, BadgeCheck, LogOut, Loader2, CheckCircle2,
@@ -12,6 +12,8 @@ import {
 } from "lucide-react";
 import { trpc } from "~/trpc/react";
 import BrandedLoader from "~/app/components/common/BrandedLoader";
+import { BookingTimeline } from "~/app/components/booking/BookingTimeline";
+import { allowedNextStatuses } from "~/lib/booking-flow";
 import { generateReactHelpers } from "@uploadthing/react";
 import type { OurFileRouter } from "~/app/uploadthing";
 
@@ -28,6 +30,7 @@ interface Profile {
   mobile?: string;
   email?: string;
   city?: string;
+  avatar?: string | null;
   vendorProfile?: {
     businessName: string;
     subscriptionPlan: string;
@@ -45,8 +48,14 @@ interface Profile {
     streetAddress?: string | null;
   } | null;
 }
-interface BookingRow { id: string; status: string; description: string; totalAmount: number; customer?: { fullName?: string } | null }
-interface LeadRow { id: string; status: string; booking?: { description: string; totalAmount: number; createdAt?: string | Date } | null }
+interface BookingRow {
+  id: string; status: string; description: string; totalAmount: number;
+  pincode?: string | null;
+  customer?: { fullName?: string } | null;
+  agent?: { fullName: string; mobile?: string } | null;
+  events?: { id: string; status: string; action?: string | null; actorRole: string; note?: string | null; createdAt: string | Date }[];
+}
+interface LeadRow { id: string; status: string; booking?: { description: string; totalAmount: number; preferredDate?: string; timeSlot?: { label?: string } | null; createdAt?: string | Date } | null }
 
 function KycUpload({ label, value, hint, onUpload, onRemove }: { label: string; value: string; hint: string; onUpload: (url: string) => void; onRemove: () => void }) {
   const [uploading, setUploading] = useState(false);
@@ -102,12 +111,19 @@ export default function VendorDashboard() {
   const { data: session, status } = useSession();
   const router = useRouter();
   const sUser = session?.user;
-  const role = (sUser?.role ?? "").toUpperCase();
+  const role = (((sUser as { role?: string } | undefined)?.role) ?? "").toUpperCase();
   const vendorId = sUser?.id ?? "";
 
-  const [tab, setTab] = useState<Tab>("overview");
+  // Route-driven tabs: /vendor, /vendor/orders, /vendor/jobs, /vendor/kyc.
+  const params = useParams();
+  const rawSection = params?.section;
+  const sectionParam = Array.isArray(rawSection) ? rawSection[0] : rawSection;
+  const TAB_KEYS: Tab[] = ["overview", "orders", "jobs", "kyc"];
+  const tab: Tab = sectionParam && TAB_KEYS.includes(sectionParam as Tab) ? (sectionParam as Tab) : "overview";
+  const goTab = (t: Tab) => router.push(t === "overview" ? "/vendor" : `/vendor/${t}`);
   const [loggingOut, setLoggingOut] = useState<"confirm" | "signedout" | null>(null);
   const [notifOpen, setNotifOpen] = useState(false);
+  const [openHistory, setOpenHistory] = useState<string | null>(null);
   const [kycOpen, setKycOpen] = useState(false);
   const [bizName, setBizName] = useState("");
   const [exp, setExp] = useState("2");
@@ -142,6 +158,7 @@ export default function VendorDashboard() {
 
   const profile = meQ.data as Profile | undefined;
   const profileLoaded = !!profile;
+  const vendorInitials = (profile?.fullName ?? "?").split(/\s+/).filter(Boolean).map((p) => p[0]).slice(0, 2).join("").toUpperCase();
   const isApproved = profile?.vendorProfile?.isApproved ?? false;
   const kycStatus = profile?.vendorProfile?.kycStatus ?? "PENDING";
   const servingQ = trpc.areas.byCity.useQuery({ city: profile?.city ?? "" }, { enabled: !!profile?.city && !!profile?.vendorProfile?.streetAddress });
@@ -169,7 +186,7 @@ export default function VendorDashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, profileLoaded]);
 
-  const stats = statsQ.data as { totalEarnings?: number; totalJobs?: number; completedJobs?: number; pendingJobs?: number; rating?: number } | undefined;
+  const stats = statsQ.data as { totalEarnings?: number; totalJobs?: number; completedJobs?: number; pendingJobs?: number; rating?: number; totalReviews?: number } | undefined;
   const jobs = useMemo(() => ((jobsQ.data as BookingRow[] | undefined) ?? []), [jobsQ.data]);
   const leads = useMemo(() => ((leadsQ.data as LeadRow[] | undefined) ?? []), [leadsQ.data]);
   const pendingLeads = leads.filter((l) => l.status === "pending").length;
@@ -229,16 +246,16 @@ export default function VendorDashboard() {
         </div>
         <nav className="flex-1 space-y-1 overflow-y-auto px-3">
           {NAV.map(({ key, label, Icon, badge }) => (
-            <button
+            <Link
               key={key}
-              onClick={() => setTab(key)}
+              href={key === "overview" ? "/vendor" : `/vendor/${key}`}
               className={`flex w-full items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm font-bold transition-all ${tab === key ? "bg-white text-ink shadow-sm" : "text-slate-300 hover:bg-white/10 hover:text-white"}`}
             >
               <Icon size={17} className={tab === key ? "text-primary-600" : ""} />
               <span className="flex-1 text-left">{label}</span>
               {badge !== undefined && badge > 0 ? <span className="rounded-full bg-accent-400 px-2 py-0.5 text-[11px] font-extrabold text-accent-ink">{badge}</span> : null}
               {tab === key ? <ChevronRight size={14} className="text-muted" /> : null}
-            </button>
+            </Link>
           ))}
         </nav>
         <div className="space-y-1 p-3">
@@ -260,9 +277,17 @@ export default function VendorDashboard() {
       <div className="min-w-0 flex-1">
         {/* ── Desktop header ── */}
         <header className="sticky top-0 z-30 hidden items-center justify-between border-b border-line bg-white/95 px-6 py-3 backdrop-blur lg:flex">
-          <div>
-            <h1 className="text-lg font-extrabold tracking-tight text-ink">Welcome back, {profile?.fullName?.split(" ")[0] ?? "there"} 👋</h1>
-            <p className="text-xs font-medium text-muted">{profile?.city ?? ""} • {new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long" })}</p>
+          <div className="flex items-center gap-3">
+            {profile?.avatar ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={profile.avatar} alt="" className="h-10 w-10 rounded-full object-cover ring-2 ring-primary-100" />
+            ) : (
+              <span className="flex h-10 w-10 items-center justify-center rounded-full bg-primary-50 text-xs font-extrabold text-primary-700 ring-1 ring-primary-100">{vendorInitials}</span>
+            )}
+            <div>
+              <h1 className="text-lg font-extrabold tracking-tight text-ink">Welcome back, {profile?.fullName?.split(" ")[0] ?? "there"} 👋</h1>
+              <p className="text-xs font-medium text-muted">{profile?.city ?? ""} • {new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long" })}</p>
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <button onClick={() => setNotifOpen((o) => !o)} aria-label="Notifications" className="relative rounded-full border border-line bg-white p-2.5 text-body shadow-sm transition-all hover:border-primary-300 hover:text-primary-700">
@@ -286,9 +311,9 @@ export default function VendorDashboard() {
           </div>
           <nav className="no-scrollbar flex gap-1.5 overflow-x-auto px-3 pb-2.5">
             {NAV.map(({ key, label, badge }) => (
-              <button key={key} onClick={() => setTab(key)} className={`tab-pill shrink-0 !text-[13px] ${tab === key ? "tab-pill-active" : "tab-pill-idle"}`}>
+              <Link key={key} href={key === "overview" ? "/vendor" : `/vendor/${key}`} className={`tab-pill shrink-0 !text-[13px] ${tab === key ? "tab-pill-active" : "tab-pill-idle"}`}>
                 {label}{badge !== undefined && badge > 0 ? ` (${badge})` : ""}
-              </button>
+              </Link>
             ))}
           </nav>
         </header>
@@ -338,7 +363,7 @@ export default function VendorDashboard() {
                 <div className="card">
                   <div className="mb-2 flex items-center justify-between">
                     <p className="font-extrabold text-ink">New leads</p>
-                    <button onClick={() => setTab("orders")} className="text-[13px] font-bold text-primary-600">View all →</button>
+                    <button onClick={() => goTab("orders")} className="text-[13px] font-bold text-primary-600">View all →</button>
                   </div>
                   {leads.length === 0 ? (
                     <p className="sub py-6 text-center">No leads yet — complete your KYC to get booked.</p>
@@ -386,12 +411,15 @@ export default function VendorDashboard() {
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="min-w-0">
                         <p className="truncate font-bold text-ink">{j.description} <span className="font-extrabold text-primary-600">• {inr(j.totalAmount)}</span></p>
-                        <p className="text-xs text-muted">Customer: {j.customer?.fullName ?? "—"}</p>
+                        <p className="text-xs text-muted">Customer: {j.customer?.fullName ?? "—"}{j.pincode ? ` · ${j.pincode}` : ""}{j.agent ? ` · agent ${j.agent.fullName}` : ""}</p>
                       </div>
-                      <div className="flex gap-1.5">
-                        {["ACCEPTED", "IN_PROGRESS", "COMPLETED"].map((s) => (
-                          <button key={s} onClick={() => updateStatus.mutate({ id: j.id, status: s as "ACCEPTED" })} disabled={updateStatus.isPending} className="rounded-full bg-surface px-3 py-1 text-[11px] font-bold text-body hover:bg-primary-50 hover:text-primary-700 disabled:opacity-50">{s.replace(/_/g, " ")}</button>
+                      <div className="flex flex-wrap gap-1.5">
+                        {allowedNextStatuses("VENDOR", j.status).map((s) => (
+                          <button key={s} onClick={() => updateStatus.mutate({ id: j.id, status: s })} disabled={updateStatus.isPending} className="rounded-full bg-surface px-3 py-1 text-[11px] font-bold text-body hover:bg-primary-50 hover:text-primary-700 disabled:opacity-50">{s.replace(/_/g, " ")}</button>
                         ))}
+                        {allowedNextStatuses("VENDOR", j.status).length === 0 ? (
+                          <span className="text-[11px] font-semibold text-muted">No action needed</span>
+                        ) : null}
                       </div>
                     </div>
                     {/* status timeline */}
@@ -410,6 +438,21 @@ export default function VendorDashboard() {
                           </div>
                         );
                       })}
+                    </div>
+                    <div className="mt-3">
+                      <button
+                        type="button"
+                        onClick={() => setOpenHistory(openHistory === j.id ? null : j.id)}
+                        className="inline-flex items-center gap-1.5 rounded-full border border-line bg-white px-3 py-1.5 text-[11px] font-bold text-body transition-colors hover:border-primary-200 hover:text-primary-700"
+                      >
+                        <Clock size={13} />
+                        {openHistory === j.id ? "Hide history" : `Tracking history (${j.events?.length ?? 0})`}
+                      </button>
+                      {openHistory === j.id ? (
+                        <div className="mt-2 rounded-xl border border-line bg-surface p-3">
+                          <BookingTimeline events={j.events ?? []} />
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                 );

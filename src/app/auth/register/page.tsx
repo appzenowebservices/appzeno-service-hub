@@ -5,19 +5,18 @@ import Link from "next/link";
 import Image from "next/image";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
-  UserRound, Briefcase, Building2, Loader2, AlertCircle,
-  BadgeCheck, Wallet, ShieldCheck, Banknote, CheckCircle2, ArrowRight, MapPin,
+  UserRound, Briefcase, Loader2, AlertCircle,
+  BadgeCheck, Wallet, ShieldCheck, CheckCircle2, ArrowRight, MapPin,
 } from "lucide-react";
 import { trpc } from "~/trpc/react";
 import LocationPicker from "~/app/components/location/LocationPicker";
 import { LOCATION_EVENT, loadLocation } from "~/app/components/location/location-store";
 
-type Role = "CUSTOMER" | "VENDOR" | "AGENT";
+type Role = "CUSTOMER" | "VENDOR";
 
 const ROLES: { key: Role; label: string; Icon: typeof UserRound; param: string }[] = [
   { key: "CUSTOMER", label: "Customer", Icon: UserRound, param: "customer" },
   { key: "VENDOR", label: "Vendor", Icon: Briefcase, param: "vendor" },
-  { key: "AGENT", label: "Agent", Icon: Building2, param: "agent" },
 ];
 
 const ROLE_COPY: Record<Role, { badge: string; title: string; accent: string; sub: string; points: { t: string; d: string }[]; foot: [string, string][] }> = {
@@ -45,18 +44,6 @@ const ROLE_COPY: Record<Role, { badge: string; title: string; accent: string; su
     ],
     foot: [["2k+", "active pros"], ["₹55k", "avg. earnings"], ["0", "joining fee"]],
   },
-  AGENT: {
-    badge: "5% commission on every city booking",
-    title: "Own the services business",
-    accent: "in your city.",
-    sub: "Onboard vendors, resolve disputes, watch your city grow — with analytics and payouts handled for you.",
-    points: [
-      { t: "Recurring city income", d: "Commission on every completed booking" },
-      { t: "Vendor network = your asset", d: "Onboard pros, build your territory" },
-      { t: "Full ops support", d: "Disputes, payouts and training included" },
-    ],
-    foot: [["5%", "commission"], ["10", "cities"], ["24h", "payout help"]],
-  },
 };
 
 const POINT_ICONS = [BadgeCheck, Wallet, ShieldCheck];
@@ -78,7 +65,9 @@ function RegisterForm() {
   const pathname = usePathname();
   const sp = useSearchParams();
   const preset = (sp.get("role") ?? "customer").toLowerCase();
-  const initialRole: Role = preset === "vendor" ? "VENDOR" : preset === "agent" ? "AGENT" : "CUSTOMER";
+  const initialRole: Role = preset === "vendor" ? "VENDOR" : "CUSTOMER";
+  // Agent accounts are provisioned by the superadmin, not self-signup.
+  const agentSignupBlocked = preset === "agent";
 
   const [role, setRole] = useState<Role>(initialRole);
   const [fullName, setFullName] = useState("");
@@ -96,7 +85,6 @@ function RegisterForm() {
   const [businessName, setBusinessName] = useState("");
   const [experience, setExperience] = useState("2");
   const [cats, setCats] = useState<string[]>([]);
-  const [officeAddress, setOfficeAddress] = useState("");
   const [terms, setTerms] = useState(false);
   const [err, setErr] = useState("");
   const [done, setDone] = useState<Role | null>(null);
@@ -160,14 +148,13 @@ function RegisterForm() {
         businessName: role === "VENDOR" ? businessName.trim() : undefined,
         serviceCategories: role === "VENDOR" ? cats : undefined,
         yearsOfExperience: role === "VENDOR" && Number.isInteger(exp) && exp >= 0 && exp <= 60 ? exp : undefined,
-        officeAddress: role === "AGENT" && officeAddress.trim() !== "" ? officeAddress.trim() : undefined,
       });
       // Mailing-list subscribes fire HERE — immediately after account creation,
       // never after login: new accounts are unverified so the auto-signIn below
       // is expected to fail, and must not gate the subscription.
       // Everyone gets subscribed by default (the checkbox was removed) so Patra
       // can trigger the opt-in email; they can unsubscribe from the email itself.
-      const sourceMap = { AGENT: "agent_registration", VENDOR: "vendor_registration", CUSTOMER: "customer_registration" } as const;
+      const sourceMap = { VENDOR: "vendor_registration", CUSTOMER: "customer_registration" } as const;
       if (em !== "") {
         subscribeMailingList(em, fullName.trim(), sourceMap[role]).catch(() => undefined);
       }
@@ -233,9 +220,9 @@ function RegisterForm() {
   }
 
   return (
-    <div className="grid min-h-screen bg-white font-sans lg:grid-cols-[1.05fr_1fr]">
+    <div className="grid min-h-screen bg-white font-sans lg:h-screen lg:grid-cols-[1.05fr_1fr] lg:overflow-hidden">
       {/* ── Left: role-aware brand panel ── */}
-      <aside className="relative hidden overflow-hidden bg-primary-900 text-white lg:flex lg:flex-col lg:justify-between lg:p-10 xl:p-14">
+      <aside className="relative hidden overflow-hidden bg-primary-900 text-white lg:flex lg:h-screen lg:flex-col lg:justify-between lg:p-10 xl:p-14">
         <div aria-hidden className="pointer-events-none absolute -right-32 -top-32 h-[480px] w-[480px] rounded-full bg-primary-500/25 blur-3xl" />
         <div aria-hidden className="pointer-events-none absolute -bottom-40 -left-24 h-[420px] w-[420px] rounded-full bg-accent-400/20 blur-3xl" />
         <div
@@ -282,8 +269,8 @@ function RegisterForm() {
       </aside>
 
       {/* ── Right: form panel ── */}
-      <main className="flex justify-center bg-surface px-4 py-8 sm:px-8 lg:items-center lg:py-10">
-        <div className="w-full max-w-md">
+      <main className="flex flex-col bg-surface px-4 py-8 sm:px-8 lg:h-screen lg:overflow-y-auto lg:py-10">
+        <div className="mx-auto my-auto w-full max-w-md">
           <Link href="/" className="mb-5 flex items-center gap-2.5 lg:hidden">
             <Image src="/logo.png" alt="ADDies" width={36} height={36} className="h-9 w-9 object-contain" />
             <span className="leading-none">
@@ -294,7 +281,7 @@ function RegisterForm() {
 
           <h2 className="text-2xl font-extrabold tracking-tight text-ink sm:text-[28px]">Create your account</h2>
           <p className="sub mt-1.5">
-            {role === "VENDOR" ? "Free listing • approval in 24–48 hrs • weekly payouts." : role === "AGENT" ? "5% commission • your city, your network." : "₹100 wallet bonus • book in 60 seconds."}
+            {role === "VENDOR" ? "Free listing • approval in 24–48 hrs • weekly payouts." : "₹100 wallet bonus • book in 60 seconds."}
           </p>
 
           {sp.get("google") === "1" ? (
@@ -304,7 +291,7 @@ function RegisterForm() {
           ) : null}
 
           {/* role switch */}
-          <div className="mt-5 grid grid-cols-3 gap-2 rounded-2xl border border-line bg-white p-1.5">
+          <div className="mt-5 grid grid-cols-2 gap-2 rounded-2xl border border-line bg-white p-1.5">
             {ROLES.map(({ key, label, Icon }) => (
               <button
                 key={key}
@@ -316,6 +303,12 @@ function RegisterForm() {
               </button>
             ))}
           </div>
+
+          {agentSignupBlocked ? (
+            <div className="mt-3 rounded-xl border border-accent-200 bg-accent-50 p-3 text-[12px] font-semibold text-accent-600">
+              Agent accounts are created by the ADDies team. Register as a customer or vendor below, or contact support to join the agent network.
+            </div>
+          ) : null}
 
           <form onSubmit={submit} className="mt-5 flex flex-col gap-3.5">
             <div>
@@ -376,16 +369,6 @@ function RegisterForm() {
                 ) : (
                 <p className="rounded-xl bg-surface px-3.5 py-2.5 text-[13px] font-medium text-muted">Service catalog is being set up — register now, and our team will assign your services during KYC verification.</p>
                 )}
-              </div>
-            )}
-
-            {/* ── agent extras ── */}
-            {role === "AGENT" && (
-              <div className="rounded-2xl border border-line bg-white p-4">
-                <p className="mb-3 text-xs font-extrabold uppercase tracking-wider text-muted">Agent details</p>
-                <label htmlFor="reg-office" className="mb-1.5 block text-[13px] font-extrabold text-ink">Office address <span className="font-semibold text-muted">(optional)</span></label>
-                <input id="reg-office" placeholder={`e.g. MG Road, ${city}`} value={officeAddress} onChange={(e) => setOfficeAddress(e.target.value)} className="input !py-3" />
-                <p className="mt-2 flex items-start gap-1.5 text-xs font-medium text-muted"><Banknote size={13} className="mt-0.5 shrink-0 text-success" /> Territory auto-assigned: <b className="text-ink">{city}</b> at 5% commission.</p>
               </div>
             )}
 

@@ -21,6 +21,7 @@ export const agentsRouter = createTRPCRouter({
       streetAddress: user.agentProfile.streetAddress ?? null,
       commissionPercent: user.agentProfile.commissionPercent,
       fullName: user.fullName,
+      avatar: user.avatar ?? null,
       isVerified: user.isVerified,
     };
   }),
@@ -32,6 +33,28 @@ export const agentsRouter = createTRPCRouter({
       const id = (ctx.session.user as { id: string }).id;
       const profile = await ctx.db.agentProfile.findFirst({ where: { userId: id } });
       if (!profile) throw new TRPCError({ code: "NOT_FOUND", message: "Agent profile not found" });
+
+      // Agents may only claim pincodes the superadmin has enabled for their
+      // assigned city — never arbitrary pincodes.
+      const area = await ctx.db.servingArea.findFirst({
+        where: { city: profile.assignedCity, isActive: true },
+        select: { city: true, pincodes: true },
+      });
+      if (!area) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `No serving area is configured for ${profile.assignedCity}. Contact the admin.`,
+        });
+      }
+      const allowed = new Set(area.pincodes);
+      const invalid = input.pincodes.filter((p) => !allowed.has(p));
+      if (invalid.length > 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Pincode${invalid.length > 1 ? "s" : ""} not available in ${area.city}: ${invalid.join(", ")}`,
+        });
+      }
+
       return ctx.db.agentProfile.update({
         where: { id: profile.id },
         data: { serviceAreaPincodes: [...new Set(input.pincodes)] },
@@ -95,9 +118,15 @@ export const agentsRouter = createTRPCRouter({
       include: { vendorProfile: true },
     });
     const area = vendors.filter((v) => inArea(agentPincodes, agentCity, v.vendorProfile?.serviceAreaPincodes ?? [], v.city));
-    const areaIds = area.map((v) => v.id);
+    const bookingScope = {
+      status: { notIn: ["CANCELLED", "DISPUTED"] as const },
+      OR: [
+        { agentId: user.id },
+        ...(agentPincodes.length > 0 ? [{ pincode: { in: agentPincodes } }] : []),
+      ],
+    };
     const [bookings, approved, pendingKyc] = await Promise.all([
-      ctx.db.booking.count({ where: { vendorId: { in: areaIds }, status: { notIn: ["CANCELLED", "DISPUTED"] } } }),
+      ctx.db.booking.count({ where: bookingScope as never }),
       area.filter((v) => v.vendorProfile?.isApproved).length,
       area.filter((v) => v.vendorProfile?.kycStatus === "PENDING").length,
     ]);

@@ -4,8 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { Eye, EyeOff, LogIn, ShieldCheck, UserCircle, Briefcase, Building2, Crown, Loader2, AlertCircle, ArrowLeft, BadgeCheck, Wallet, Star, CheckCircle2, Smartphone } from "lucide-react";
-import { signIn, signOut, getSession } from "next-auth/react";
+import { Eye, EyeOff, LogIn, ShieldCheck, Loader2, AlertCircle, ArrowLeft, BadgeCheck, Wallet, Star, CheckCircle2, Smartphone } from "lucide-react";
+import { signIn, getSession } from "next-auth/react";
 import { useAuthStore } from "../../../../store/authStore";
 import { trpc } from "~/trpc/react";
 import { confirmPhoneCode, phoneAuthErrorMessage, startPhoneVerification } from "~/firebase/phone";
@@ -82,14 +82,9 @@ export default function LoginPage() {
     let userId = sUser?.id ?? "";
     let fullName = sUser?.name ?? "";
 
-    // Hard gate: an unverified mobile must never reach the dashboard. If the
-    // pre-check was bypassed (stale bundle, direct authorize), bounce back.
-    if (session && role !== "" && role !== "ADMIN" && !(sUser as { mobileVerified?: boolean } | undefined)?.mobileVerified) {
-      await signOut({ redirect: false });
-      setLoading(false);
-      openOtp("login");
-      return;
-    }
+    // Mobile verification is on hold — e-mail confirmation is the gate, and it
+    // is already enforced by `auth.login` (isVerified). Do not block sign-in
+    // for an unverified mobile number.
 
     // Fallback: fetch via public tRPC lookup if session race
     if (!role) {
@@ -214,8 +209,10 @@ export default function LoginPage() {
       if (!check.ok) {
         setLoading(false);
         if (check.reason === "ENV_ADMIN") {
-          // Env-root account (no DB password) — NextAuth authorize() decides.
-          await proceedSignIn();
+          // The env-root superadmin has its own secured console — never sign
+          // it in through the customer/vendor/agent login page.
+          setLoading(false);
+          router.push("/auth/superadmin");
           return;
         }
         if (check.reason === "BLOCKED") {
@@ -234,35 +231,20 @@ export default function LoginPage() {
           setError("This account has no password — sign in with Google using your account email.");
           return;
         }
-        // NO_ACCOUNT: verify the number first (OTP), then continue to sign-up.
-        if (/^\d{10}$/.test(mobile.trim())) {
-          openOtp("signup");
-          return;
-        }
+        // NO_ACCOUNT: no OTP gate (mobile verification is on hold) — send the
+        // visitor to registration.
         setError("No account found with these details. Tap “Join as customer” below to create one.");
         return;
       }
 
-      // Existing account with an unverified mobile → OTP, then sign in.
-      // Env superadmin (ADMIN) has no verifiable DB mobile, so it is skipped.
-      if (String(check.role).toUpperCase() !== "ADMIN" && check.mobileVerified === false) {
-        setLoading(false);
-        openOtp("login");
-        return;
-      }
+      // Mobile verification is on hold — proceed straight to NextAuth. E-mail
+      // verification is already enforced inside `auth.login`.
     } catch {
       // Pre-check unavailable — let NextAuth decide.
     }
 
     await proceedSignIn();
   };
-
-  const ROLE_HINTS = [
-    { role: "Customer", icon: UserCircle, color: "text-blue-600", bg: "bg-blue-50", mobile: "9876543210", pass: "Customer@123" },
-    { role: "Vendor", icon: Briefcase, color: "text-emerald-600", bg: "bg-emerald-50", mobile: "9123456789", pass: "Vendor@123" },
-    { role: "City Agent", icon: Building2, color: "text-violet-600", bg: "bg-violet-50", mobile: "9988776655", pass: "Agent@123" },
-    { role: "Super Admin", icon: Crown, color: "text-amber-600", bg: "bg-amber-50", mobile: "9000000001", pass: "Admin@123#" },
-  ];
 
   return (
     <div className="grid min-h-screen bg-white font-sans lg:grid-cols-[1.05fr_1fr]">
@@ -525,32 +507,8 @@ export default function LoginPage() {
             <Link href="/auth/register?role=vendor" className="btn-ghost !py-3">Become a pro</Link>
           </div>
 
-          <details className="card group mt-5 !p-0">
-            <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3.5 text-[13px] font-extrabold text-ink [&::-webkit-details-marker]:hidden">
-              <ShieldCheck size={15} className="text-primary-600" />
-              Demo accounts — click to autofill
-              <span className="ml-auto text-lg font-bold leading-none text-primary-600 group-open:rotate-45">＋</span>
-            </summary>
-            <div className="grid grid-cols-2 gap-2 px-4 pb-4">
-              {ROLE_HINTS.map(({ role, icon: Icon, color, bg, mobile: m, pass: p }) => (
-                <button
-                  key={role}
-                  type="button"
-                  onClick={() => { setMobile(m); setPassword(p); setError(""); }}
-                  className="flex items-center gap-2 rounded-xl border border-line bg-surface px-3 py-2.5 text-left transition-all hover:border-primary-300 hover:bg-primary-50"
-                >
-                  <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${bg}`}><Icon size={15} className={color} /></span>
-                  <span>
-                    <span className="block text-xs font-extrabold text-ink">{role}</span>
-                    <span className="block font-mono text-[11px] text-muted">{m}</span>
-                  </span>
-                </button>
-              ))}
-            </div>
-          </details>
-
           <p className="mt-6 text-center text-xs leading-relaxed text-muted">
-            Protected by OTP-verified accounts • By signing in you agree to our{" "}
+            Protected by e-mail verified accounts • By signing in you agree to our{" "}
             <Link href="/terms" className="font-bold text-primary-600 hover:underline">Terms</Link> &{" "}
             <Link href="/privacy" className="font-bold text-primary-600 hover:underline">Privacy Policy</Link>
           </p>

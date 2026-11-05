@@ -3,38 +3,108 @@
 import { useMemo, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import {
   LayoutDashboard, Store, LogOut, ShieldCheck, MapPin, ChevronRight,
   X, ArrowUpRight, Bell, Check, TrendingUp, Briefcase, IndianRupee, Search, UserCheck, MapPinned,
+  ClipboardList, Clock, Loader2, Phone,
 } from "lucide-react";
 import { trpc } from "~/trpc/react";
 import BrandedLoader from "~/app/components/common/BrandedLoader";
+import { BookingTimeline } from "~/app/components/booking/BookingTimeline";
+import { allowedNextStatuses } from "~/lib/booking-flow";
 
-type Tab = "overview" | "vendors" | "area";
+type Tab = "overview" | "vendors" | "bookings" | "area";
 
 interface AreaVendor {
   id: string; fullName: string; mobile: string; city: string; isActive: boolean; isVerified: boolean;
   vendorProfile: { businessName: string | null; kycStatus: string; isApproved: boolean; rating: number; totalReviews: number; serviceAreaPincodes: string[]; totalJobs: number };
 }
 
+interface AgentBookingEvent {
+  id: string; status: string; action?: string | null; actorRole: string; note?: string | null; createdAt: string | Date;
+}
+interface AgentBooking {
+  id: string; status: string; description: string; totalAmount: number; pincode?: string | null; city?: string | null;
+  vendorId?: string | null;
+  address?: { area?: string; city?: string; pincode?: string; houseNo?: string } | null;
+  createdAt?: string | Date;
+  customer?: { fullName?: string; mobile?: string } | null;
+  vendor?: { id: string; fullName: string; vendorProfile?: { businessName?: string } | null } | null;
+  agent?: { fullName?: string } | null;
+  events?: AgentBookingEvent[];
+}
+interface EligibleVendor {
+  id: string; fullName: string; businessName: string; city: string; rating: number; totalReviews: number;
+  pincodes: string[]; pincodeMatch: boolean; cityMatch: boolean;
+}
+
+const STATUS_CHIP: Record<string, string> = {
+  PENDING: "chip chip-accent",
+  ASSIGNED: "chip chip-primary",
+  ACCEPTED: "chip chip-primary",
+  IN_PROGRESS: "chip chip-primary",
+  COMPLETED: "chip chip-success",
+  CANCELLED: "chip chip-neutral",
+  DISPUTED: "chip chip-danger",
+};
+
+function inr(n: number): string {
+  return `₹${Math.round(n).toLocaleString("en-IN")}`;
+}
+
 export default function AgentPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
   const sUser = session?.user;
-  const role = (sUser?.role ?? "").toUpperCase();
+  const role = (((sUser as { role?: string } | undefined)?.role) ?? "").toUpperCase();
   const agentId = sUser?.id ?? "";
 
-  const [tab, setTab] = useState<Tab>("overview");
+  // Route-driven tabs: /agent, /agent/vendors, /agent/bookings, /agent/area.
+  const params = useParams();
+  const rawSection = params?.section;
+  const sectionParam = Array.isArray(rawSection) ? rawSection[0] : rawSection;
+  const TAB_KEYS: Tab[] = ["overview", "vendors", "bookings", "area"];
+  const tab: Tab = sectionParam && TAB_KEYS.includes(sectionParam as Tab) ? (sectionParam as Tab) : "overview";
+  const goTab = (t: Tab) => router.push(t === "overview" ? "/agent" : `/agent/${t}`);
   const [pinErr, setPinErr] = useState("");
   const [street, setStreet] = useState("");
   const [search, setSearch] = useState("");
   const [loggingOut, setLoggingOut] = useState<"confirm" | "signedout" | null>(null);
+  const [bookingFilter, setBookingFilter] = useState<"all" | "unassigned" | "active" | "completed">("all");
+  const [selectedBooking, setSelectedBooking] = useState<AgentBooking | null>(null);
+  const [assignVendorId, setAssignVendorId] = useState("");
+  const [agentNote, setAgentNote] = useState("");
 
   const areaQ = trpc.agents.area.useQuery(undefined, { enabled: !!agentId && status === "authenticated" });
   const statsQ = trpc.agents.areaStats.useQuery(undefined, { enabled: !!agentId && status === "authenticated" });
   const vendorsQ = trpc.agents.areaVendors.useQuery(undefined, { enabled: !!agentId && status === "authenticated" });
+  const bookingsQ = trpc.bookings.getByAgent.useQuery({ limit: 50 }, { enabled: !!agentId && status === "authenticated" });
+  const bookingDetailQ = trpc.bookings.getById.useQuery(
+    { id: selectedBooking?.id ?? "" },
+    { enabled: !!selectedBooking },
+  );
+  const eligibleQ = trpc.bookings.eligibleVendors.useQuery(
+    { bookingId: selectedBooking?.id ?? "" },
+    { enabled: !!selectedBooking },
+  );
+  const assignVendor = trpc.bookings.assignVendor.useMutation({
+    onSuccess: () => {
+      void bookingsQ.refetch();
+      void bookingDetailQ.refetch();
+      setAssignVendorId("");
+      setAgentNote("");
+    },
+    onError: (e) => alert(e.message),
+  });
+  const updateStatus = trpc.bookings.updateStatus.useMutation({
+    onSuccess: () => {
+      void bookingsQ.refetch();
+      setSelectedBooking(null);
+    },
+    onError: (e) => alert(e.message),
+  });
   const setArea = trpc.agents.setServiceArea.useMutation({ onSuccess: () => areaQ.refetch() });
   const setAddress = trpc.areas.setAddress.useMutation({ onSuccess: () => { areaQ.refetch(); setStreet(""); } });
   const notifQ = trpc.admin.notifications.useQuery({ limit: 10 }, { enabled: !!agentId && status === "authenticated" });
@@ -46,16 +116,8 @@ export default function AgentPage() {
     window.setTimeout(() => signOut({ callbackUrl: "/" }), 1200);
   };
 
-  if (status === "loading") return <BrandedLoader />;
-  if (status !== "authenticated" || (role !== "AGENT" && role !== "ADMIN"))
-    return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-surface">
-        <p className="font-bold">Agent login required</p>
-        <button onClick={() => router.push("/auth/login")} className="btn-primary">Login</button>
-      </div>
-    );
-
-  const area = areaQ.data as { city?: string; pincodes?: string[]; streetAddress?: string | null; commissionPercent?: number; fullName?: string; isVerified?: boolean } | undefined;
+  const area = areaQ.data as { city?: string; pincodes?: string[]; streetAddress?: string | null; commissionPercent?: number; fullName?: string; avatar?: string | null; isVerified?: boolean } | undefined;
+  const agentInitials = (area?.fullName ?? "?").split(/\s+/).filter(Boolean).map((p) => p[0]).slice(0, 2).join("").toUpperCase();
   const servingQ = trpc.areas.byCity.useQuery({ city: area?.city ?? "" }, { enabled: !!area?.city && !!area?.streetAddress });
   const serving = servingQ.data as { city?: string; pincodes?: string[]; isActive?: boolean } | null | undefined;
   const canPickArea = !!area?.streetAddress;
@@ -69,10 +131,31 @@ export default function AgentPage() {
   const notifications = useMemo(() => ((notifQ.data as { id: string; title: string; message: string; isRead: boolean; createdAt: string | Date }[] | undefined) ?? []), [notifQ.data]);
   const unreadCount = notifications.filter((n) => !n.isRead).length;
   const pincodes = area?.pincodes ?? [];
+  const bookings = useMemo(() => {
+    const list = (bookingsQ.data as AgentBooking[] | undefined) ?? [];
+    if (bookingFilter === "unassigned") return list.filter((b) => !b.vendorId);
+    if (bookingFilter === "active") return list.filter((b) => ["PENDING", "ASSIGNED", "ACCEPTED", "IN_PROGRESS"].includes(b.status));
+    if (bookingFilter === "completed") return list.filter((b) => ["COMPLETED", "CANCELLED", "DISPUTED"].includes(b.status));
+    return list;
+  }, [bookingsQ.data, bookingFilter]);
+  const eligibleVendors = (eligibleQ.data as EligibleVendor[] | undefined) ?? [];
+  const activeBooking = (bookingDetailQ.data as AgentBooking | undefined) ?? selectedBooking;
+
+  // Must stay below every hook (auth-dependent early returns above would
+  // otherwise change the hook order between loading and authenticated renders).
+  if (status === "loading") return <BrandedLoader />;
+  if (status !== "authenticated" || (role !== "AGENT" && role !== "ADMIN"))
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-surface">
+        <p className="font-bold">Agent login required</p>
+        <button onClick={() => router.push("/auth/login")} className="btn-primary">Login</button>
+      </div>
+    );
 
   const NAV: { key: Tab; label: string; Icon: typeof LayoutDashboard }[] = [
     { key: "overview", label: "Area Overview", Icon: LayoutDashboard },
     { key: "vendors", label: "My Vendors", Icon: Store },
+    { key: "bookings", label: "Area Bookings", Icon: ClipboardList },
     { key: "area", label: "Manage Area", Icon: MapPinned },
   ];
 
@@ -88,11 +171,11 @@ export default function AgentPage() {
         </div>
         <nav className="flex-1 space-y-1 overflow-y-auto px-3">
           {NAV.map(({ key, label, Icon }) => (
-            <button key={key} onClick={() => setTab(key)} className={`flex w-full items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm font-bold transition-all ${tab === key ? "bg-white text-ink shadow-sm" : "text-slate-300 hover:bg-white/10 hover:text-white"}`}>
+            <Link key={key} href={key === "overview" ? "/agent" : `/agent/${key}`} className={`flex w-full items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm font-bold transition-all ${tab === key ? "bg-white text-ink shadow-sm" : "text-slate-300 hover:bg-white/10 hover:text-white"}`}>
               <Icon size={17} className={tab === key ? "text-primary-600" : ""} />
               <span className="flex-1 text-left">{label}</span>
               {tab === key ? <ChevronRight size={14} className="text-muted" /> : null}
-            </button>
+            </Link>
           ))}
         </nav>
         <div className="space-y-1 p-3">
@@ -113,9 +196,17 @@ export default function AgentPage() {
 
       <div className="min-w-0 flex-1">
         <header className="sticky top-0 z-30 hidden items-center justify-between border-b border-line bg-white/95 px-6 py-3 backdrop-blur lg:flex">
-          <div>
-            <h1 className="text-lg font-extrabold tracking-tight text-ink">Namaste, {area?.fullName?.split(" ")[0] ?? "Agent"} 👋</h1>
-            <p className="text-xs font-medium text-muted">{area?.city ?? ""} • {pincodes.length} pincodes in your area</p>
+          <div className="flex items-center gap-3">
+            {area?.avatar ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={area.avatar} alt="" className="h-10 w-10 rounded-full object-cover ring-2 ring-primary-100" />
+            ) : (
+              <span className="flex h-10 w-10 items-center justify-center rounded-full bg-primary-50 text-xs font-extrabold text-primary-700 ring-1 ring-primary-100">{agentInitials}</span>
+            )}
+            <div>
+              <h1 className="text-lg font-extrabold tracking-tight text-ink">Namaste, {area?.fullName?.split(" ")[0] ?? "Agent"} 👋</h1>
+              <p className="text-xs font-medium text-muted">{area?.city ?? ""} • {pincodes.length} pincodes in your area</p>
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <button onClick={() => setNotifOpen((o) => !o)} aria-label="Notifications" className="relative rounded-full border border-line bg-white p-2.5 text-body shadow-sm hover:border-primary-300 hover:text-primary-700">
@@ -138,7 +229,7 @@ export default function AgentPage() {
           </div>
           <nav className="no-scrollbar flex gap-1.5 overflow-x-auto px-3 pb-2.5">
             {NAV.map(({ key, label }) => (
-              <button key={key} onClick={() => setTab(key)} className={`tab-pill shrink-0 !text-[13px] ${tab === key ? "tab-pill-active" : "tab-pill-idle"}`}>{label}</button>
+              <Link key={key} href={key === "overview" ? "/agent" : `/agent/${key}`} className={`tab-pill shrink-0 !text-[13px] ${tab === key ? "tab-pill-active" : "tab-pill-idle"}`}>{label}</Link>
             ))}
           </nav>
         </header>
@@ -154,7 +245,7 @@ export default function AgentPage() {
                   <p className="text-xs font-medium text-accent-600">Vendors serving these pincodes automatically fall under your area.</p>
                 </div>
               </div>
-              <button onClick={() => setTab("area")} className="btn-accent !py-2">Add pincodes <ChevronRight size={14} /></button>
+              <button onClick={() => goTab("area")} className="btn-accent !py-2">Add pincodes <ChevronRight size={14} /></button>
             </div>
           ) : null}
 
@@ -179,7 +270,7 @@ export default function AgentPage() {
               <div className="card">
                 <div className="mb-2 flex items-center justify-between">
                   <p className="font-extrabold text-ink">Vendors under you</p>
-                  <button onClick={() => setTab("vendors")} className="text-[13px] font-bold text-primary-600">Manage →</button>
+                  <button onClick={() => goTab("vendors")} className="text-[13px] font-bold text-primary-600">Manage →</button>
                 </div>
                 {(vendorsQ.data as { vendors?: AreaVendor[] } | undefined)?.vendors?.length ? (
                   <div className="space-y-2">
@@ -250,6 +341,91 @@ export default function AgentPage() {
           )}
 
           {/* ═══════ AREA ═══════ */}
+          {/* ───────── BOOKINGS (pincode area) ───────── */}
+          {tab === "bookings" && (
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="font-extrabold text-ink">Bookings in your area</p>
+                  <p className="sub">
+                    Assigned to you or raised inside {pincodes.length > 0 ? pincodes.join(", ") : "your service pincodes"}.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {([
+                    ["all", "All"],
+                    ["unassigned", "Needs vendor"],
+                    ["active", "Active"],
+                    ["completed", "Closed"],
+                  ] as const).map(([key, label]) => (
+                    <button
+                      key={key}
+                      onClick={() => setBookingFilter(key)}
+                      className={`rounded-full px-3 py-1.5 text-[11px] font-bold ring-1 transition-colors ${
+                        bookingFilter === key
+                          ? "bg-primary-600 text-white ring-primary-600"
+                          : "bg-white text-body ring-line hover:bg-primary-50 hover:text-primary-700"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {bookingsQ.isLoading ? (
+                <div className="card"><p className="sub py-8 text-center">Loading area bookings…</p></div>
+              ) : bookings.length === 0 ? (
+                <div className="card">
+                  <div className="flex flex-col items-center gap-2 py-10 text-center">
+                    <span className="flex h-14 w-14 items-center justify-center rounded-full bg-surface"><ClipboardList size={24} className="text-muted" /></span>
+                    <p className="text-sm font-extrabold text-ink">No bookings in this view</p>
+                    <p className="text-xs text-muted">New bookings in your pincodes will appear here automatically.</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-2.5">
+                  {bookings.map((b) => {
+                    const vendorName = b.vendor?.vendorProfile?.businessName ?? b.vendor?.fullName ?? "";
+                    const addr = b.address ?? {};
+                    return (
+                      <div key={b.id} className="card card-hover !p-4">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="truncate font-extrabold text-ink">{b.description}</p>
+                            <p className="mt-0.5 text-xs text-muted">
+                              #{b.id.slice(-6)} · {b.customer?.fullName ?? "Customer"} · {addr.area ?? b.city ?? ""}
+                              {b.pincode ? ` (${b.pincode})` : ""}
+                            </p>
+                            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                              <span className={STATUS_CHIP[b.status] ?? "chip chip-neutral"}>{b.status.replace(/_/g, " ")}</span>
+                              {b.vendor ? (
+                                <span className="chip chip-primary">Vendor: {vendorName}</span>
+                              ) : (
+                                <span className="chip chip-accent">Needs vendor</span>
+                              )}
+                              {b.agent ? <span className="chip chip-neutral">Agent: {b.agent.fullName}</span> : null}
+                              <span className="chip chip-neutral">{b.events?.length ?? 0} events</span>
+                            </div>
+                          </div>
+                          <div className="flex shrink-0 flex-col items-end gap-1.5">
+                            <b className="text-base text-ink">{inr(b.totalAmount)}</b>
+                            <button
+                              onClick={() => { setSelectedBooking(b); setAssignVendorId(""); setAgentNote(""); }}
+                              className="btn-primary !px-3.5 !py-1.5 !text-xs"
+                            >
+                              Manage
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
           {tab === "area" && (
             <div className="grid gap-4 lg:grid-cols-2">
               <div className="card">
@@ -315,6 +491,158 @@ export default function AgentPage() {
           )}
         </main>
       </div>
+
+      {/* booking management modal */}
+      {activeBooking ? (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-ink/60 p-4 backdrop-blur-sm sm:items-center"
+          onClick={() => setSelectedBooking(null)}
+        >
+          <div
+            className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-white p-5 shadow-pop"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-lg font-extrabold leading-tight text-ink">{activeBooking.description}</p>
+                <p className="sub mt-1">
+                  #{activeBooking.id.slice(-6)} · {activeBooking.customer?.fullName ?? "Customer"} ·{" "}
+                  {activeBooking.pincode ?? activeBooking.address?.pincode ?? "No pincode"} · {inr(activeBooking.totalAmount)}
+                </p>
+              </div>
+              <button
+                onClick={() => setSelectedBooking(null)}
+                aria-label="Close"
+                className="rounded-full p-1.5 text-muted hover:bg-surface hover:text-ink"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <div className="rounded-2xl bg-surface p-3">
+                <p className="mb-1.5 text-[11px] font-extrabold uppercase tracking-wider text-muted">
+                  <MapPin size={12} className="mr-1 inline" /> Service address
+                </p>
+                <p className="text-xs leading-relaxed text-body">
+                  {[activeBooking.address?.houseNo, activeBooking.address?.area, activeBooking.address?.city, activeBooking.pincode ?? activeBooking.address?.pincode]
+                    .filter(Boolean)
+                    .join(", ") || "—"}
+                </p>
+                {activeBooking.customer?.mobile ? (
+                  <a
+                    href={`tel:${activeBooking.customer.mobile}`}
+                    className="mt-2 inline-flex items-center gap-1.5 text-xs font-bold text-primary-700 hover:underline"
+                  >
+                    <Phone size={12} /> {activeBooking.customer.fullName ?? "Customer"} · {activeBooking.customer.mobile}
+                  </a>
+                ) : null}
+              </div>
+              <div className="rounded-2xl bg-surface p-3">
+                <p className="mb-1.5 text-[11px] font-extrabold uppercase tracking-wider text-muted">Current status</p>
+                <span className={STATUS_CHIP[activeBooking.status] ?? "chip chip-neutral"}>
+                  {activeBooking.status.replace(/_/g, " ")}
+                </span>
+                <p className="mt-2 text-xs text-body">
+                  {activeBooking.vendor
+                    ? `Vendor: ${activeBooking.vendor.vendorProfile?.businessName ?? activeBooking.vendor.fullName}`
+                    : "No vendor assigned yet."}
+                </p>
+                {activeBooking.agent ? (
+                  <p className="mt-1 text-[11px] text-muted">Primary agent: {activeBooking.agent.fullName}</p>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-2xl border border-line p-3">
+              <p className="mb-2 flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-wider text-muted">
+                <Store size={12} /> Assign a vendor
+              </p>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <select
+                  value={assignVendorId}
+                  onChange={(e) => setAssignVendorId(e.target.value)}
+                  disabled={eligibleQ.isLoading || assignVendor.isPending}
+                  className="input flex-1 !py-2"
+                >
+                  <option value="">
+                    {eligibleQ.isLoading
+                      ? "Loading vendors…"
+                      : eligibleVendors.length === 0
+                        ? "No approved vendor serves this pincode"
+                        : "Select approved vendor"}
+                  </option>
+                  {eligibleVendors.map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.businessName} · {v.city}
+                      {v.pincodeMatch ? " · pincode match" : ""}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => {
+                    if (!assignVendorId || !activeBooking) return;
+                    assignVendor.mutate({
+                      id: activeBooking.id,
+                      vendorId: assignVendorId,
+                      note: agentNote.trim() || undefined,
+                    });
+                  }}
+                  disabled={!assignVendorId || assignVendor.isPending}
+                  className="btn-primary !py-2 disabled:opacity-50"
+                >
+                  {assignVendor.isPending ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />} Assign
+                </button>
+              </div>
+              {activeBooking.vendor ? (
+                <p className="mt-1.5 text-[11px] text-muted">
+                  Currently assigned to{" "}
+                  <b className="text-body">
+                    {activeBooking.vendor.vendorProfile?.businessName ?? activeBooking.vendor.fullName}
+                  </b>
+                  . Reassigning is allowed until the job is accepted.
+                </p>
+              ) : null}
+            </div>
+
+            <div className="mt-3 rounded-2xl border border-line p-3">
+              <p className="mb-2 text-[11px] font-extrabold uppercase tracking-wider text-muted">Add a note / update status</p>
+              <input
+                value={agentNote}
+                onChange={(e) => setAgentNote(e.target.value)}
+                placeholder="Optional note (visible in the history)"
+                className="input !py-2"
+              />
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {allowedNextStatuses("AGENT", activeBooking.status).map((s) => (
+                  <button
+                    key={s}
+                    onClick={() =>
+                      updateStatus.mutate({
+                        id: activeBooking.id,
+                        status: s,
+                        note: agentNote.trim() || undefined,
+                      })
+                    }
+                    disabled={updateStatus.isPending}
+                    className={s === "CANCELLED" ? "btn-danger-ghost !px-3.5 !py-1.5 !text-xs disabled:opacity-50" : "btn-ghost !px-3.5 !py-1.5 !text-xs disabled:opacity-50"}
+                  >
+                    {s.replace(/_/g, " ")}
+                  </button>
+                ))}
+                {allowedNextStatuses("AGENT", activeBooking.status).length === 0 ? (
+                  <span className="text-[11px] font-semibold text-muted">No agent status action needed at this stage.</span>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="mt-4">
+              <p className="mb-2 text-[11px] font-extrabold uppercase tracking-wider text-muted">Tracking history</p>
+              <BookingTimeline events={activeBooking.events ?? []} empty="No tracking events recorded yet." />
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {/* notifications panel */}
       {notifOpen ? (

@@ -300,10 +300,11 @@ export const vendorsRouter = createTRPCRouter({
       await ctx.db.lead.update({ where: { id: input.leadId }, data: { status: input.accept ? "accepted" : "declined" } });
       await logBookingEvent(ctx.db, {
         bookingId: lead.bookingId,
-        status: input.accept ? "ACCEPTED" : "DECLINED",
+        status: input.accept ? "ACCEPTED" : "PENDING",
+        action: input.accept ? "STATUS" : "VENDOR_DECLINED",
         actorRole: "VENDOR",
         actorId: userId,
-        note: input.accept ? "Accepted by pro" : "Declined by pro",
+        note: input.accept ? "Accepted by pro" : "Declined by pro — returned to the area queue",
       });
       // Notify the customer about the pro's decision (in-app + push).
       const short = lead.bookingId.slice(-6);
@@ -315,16 +316,39 @@ export const vendorsRouter = createTRPCRouter({
           type: "booking",
           title: "Booking accepted ✅",
           message: `${vendorName} accepted booking #${short} and will arrive as scheduled.`,
-          actionUrl: "/customer/dashboard",
+          actionUrl: "/customer/dashboard/bookings",
         });
+        if (lead.booking.agentId && lead.booking.agentId !== userId) {
+          await notifyUser(ctx.db, {
+            userId: lead.booking.agentId,
+            type: "area",
+            title: "Pro accepted your booking",
+            message: `Booking #${short} was accepted by ${vendorName}.`,
+            actionUrl: "/agent/bookings",
+          });
+        }
       } else {
+        // Release the vendor so the area agent/admin can assign someone else.
+        await ctx.db.booking.update({
+          where: { id: lead.bookingId },
+          data: { status: "PENDING", vendorId: null },
+        });
         await notifyUser(ctx.db, {
           userId: lead.booking.customerId,
           type: "booking",
           title: "Finding another pro…",
           message: `Your pro couldn't take booking #${short}. We're assigning another verified pro.`,
-          actionUrl: "/customer/dashboard",
+          actionUrl: "/customer/dashboard/bookings",
         });
+        if (lead.booking.agentId) {
+          await notifyUser(ctx.db, {
+            userId: lead.booking.agentId,
+            type: "area",
+            title: "Vendor declined — reassign needed",
+            message: `Booking #${short} is back in the area queue and needs another vendor.`,
+            actionUrl: "/agent/bookings",
+          });
+        }
       }
       return { accepted: input.accept, bookingId: lead.bookingId };
     }),

@@ -1,27 +1,75 @@
+import { createHash, randomBytes } from "node:crypto";
 import { createTRPCRouter, publicProcedure } from "~/server/api/trpc";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { compare, genSalt, hash } from "bcryptjs";
+import type { PrismaClient } from "@prisma/client";
 import { getFirebaseAdminAuth } from "~/server/firebase/admin";
+import {
+  PATRA_TX_RESET_PASSWORD,
+  PATRA_TX_WELCOME,
+  sendPatraTx,
+} from "~/server/patra/client";
+
+function hashResetToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+function firstName(fullName: string): string {
+  return fullName.trim().split(/\s+/)[0] ?? "there";
+}
+
+function appUrl(): string {
+  return (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/+$/, "");
+}
+
+/**
+ * Finds every active account for an e-mail. `email` is not unique by design
+ * (one person can hold CUSTOMER + VENDOR + AGENT rows), so a reset link resets
+ * all of them together. MongoDB/Prisma has no `mode: "insensitive"`, so after
+ * an exact match fails we fall back to a small in-memory comparison for legacy
+ * mixed-case rows.
+ */
+async function findActiveUsersByEmail(db: PrismaClient, email: string) {
+  const normalized = email.trim().toLowerCase();
+  const select = { id: true, fullName: true, email: true } as const;
+  const exact = await db.user.findMany({
+    where: { email: normalized, isActive: true },
+    select,
+  });
+  if (exact.length > 0) return exact;
+
+  const all = await db.user.findMany({
+    where: { isActive: true, email: { not: null } },
+    select,
+  });
+  return all.filter((u) => (u.email ?? "").trim().toLowerCase() === normalized);
+}
 
 export const authRouter = createTRPCRouter({
   login: publicProcedure
     .input(z.object({ mobile: z.string(), password: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const identifier = input.mobile.trim();
+      const emailIdentifier = identifier.includes("@") ? identifier.toLowerCase() : identifier;
+
+      // The env-root superadmin has its own door (/auth/superadmin). Detect it
+      // before the DB lookup so the standard login page can redirect even
+      // before `prisma/ensure-superadmin.mjs` has created its DB row.
+      const envMobile = (process.env.SUPERADMIN_MOBILE ?? "").trim();
+      if (envMobile !== "" && identifier === envMobile) {
+        return { ok: false as const, reason: "ENV_ADMIN" as const };
+      }
+
       const user = await ctx.db.user.findFirst({
-        where: { OR: [{ mobile: identifier }, { email: identifier }] },
+        where: { OR: [{ mobile: identifier }, { email: emailIdentifier }] },
       });
 
       // Structured result instead of throwing: the login page needs to tell
-      // "no account", "wrong password", "blocked", "unverified email" and the
-      // env superadmin (no DB password) apart to drive the right UX.
+      // "no account", "wrong password", "blocked", "unverified email" apart
+      // to drive the right UX.
       if (!user) return { ok: false as const, reason: "NO_ACCOUNT" as const };
-      if (!user.passwordHash) {
-        const envMobile = (process.env.SUPERADMIN_MOBILE ?? "").trim();
-        // The env-root superadmin's DB row has no password on purpose.
-        return { ok: false as const, reason: envMobile !== "" && user.mobile === envMobile ? ("ENV_ADMIN" as const) : ("NO_PASSWORD" as const) };
-      }
+      if (!user.passwordHash) return { ok: false as const, reason: "NO_PASSWORD" as const };
       if (!user.isActive) {
         return { ok: false as const, reason: "BLOCKED" as const, message: "Account blocked. Contact support." };
       }
@@ -93,46 +141,91 @@ export const authRouter = createTRPCRouter({
       return { ok: true };
     }),
 
-  /** Step 1 of forgot-password: does an active account exist for this mobile? */
-  startPasswordReset: publicProcedure
-    .input(z.object({ mobile: z.string().regex(/^\d{10}$/, "Enter a valid 10-digit mobile") }))
+  /**
+   * Forgot password: e-mails a single-use Patra reset link valid for 30 min.
+   * Always reports success so the form cannot be used to enumerate accounts.
+   */
+  requestPasswordReset: publicProcedure
+    .input(z.object({ email: z.string().trim().email("Enter a valid e-mail address") }))
     .mutation(async ({ ctx, input }) => {
-      const user = await ctx.db.user.findFirst({ where: { mobile: input.mobile.trim() }, select: { id: true, isActive: true, passwordHash: true } });
-      const envMobile = (process.env.SUPERADMIN_MOBILE ?? "").trim();
-      if (envMobile !== "" && input.mobile.trim() === envMobile) return { ok: false as const, reason: "PROTECTED" as const };
-      if (!user) return { ok: false as const, reason: "NO_ACCOUNT" as const };
-      if (!user.isActive) return { ok: false as const, reason: "BLOCKED" as const };
-      return { ok: true as const, hasPassword: Boolean(user.passwordHash) };
+      const email = input.email.trim().toLowerCase();
+      const users = await findActiveUsersByEmail(ctx.db, email);
+      if (users.length === 0) return { ok: true as const };
+
+      const token = randomBytes(32).toString("hex");
+      const tokenHash = hashResetToken(token);
+      const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
+
+      // One link resets every role account that shares this e-mail address.
+      await ctx.db.user.updateMany({
+        where: { id: { in: users.map((u) => u.id) } },
+        data: { passwordResetTokenHash: tokenHash, passwordResetExpires: expiresAt },
+      });
+
+      const resetUrl = `${appUrl()}/auth/reset-password?token=${token}`;
+      // Local testing only: lets you open the exact e-mailed link without an
+      // inbox. Never printed in production.
+      if (process.env.NODE_ENV !== "production") {
+        console.log(`[auth] dev reset link: ${resetUrl}`);
+      }
+      void sendPatraTx({
+        templateId: PATRA_TX_RESET_PASSWORD,
+        to: email,
+        data: { name: firstName(users[0].fullName), resetUrl },
+      }).catch((err) =>
+        console.error("[auth] password-reset e-mail failed:", err instanceof Error ? err.message : err),
+      );
+
+      console.log(`[auth] password-reset link issued for ${users.length} account(s)`);
+      return { ok: true as const };
     }),
 
-  /** Step 2: verify the OTP and set a new password. */
-  resetPasswordWithOtp: publicProcedure
-    .input(z.object({ mobile: z.string(), idToken: z.string().min(20), newPassword: z.string().min(6) }))
+  /** Sets a new password from the e-mailed single-use token. */
+  resetPassword: publicProcedure
+    .input(
+      z.object({
+        token: z.string().trim().min(20, "Reset link is incomplete"),
+        password: z.string().min(6, "Password must be at least 6 characters"),
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
-      const user = await ctx.db.user.findFirst({ where: { mobile: input.mobile.trim() } });
-      if (!user) throw new TRPCError({ code: "NOT_FOUND", message: "No account found with this mobile number." });
-      if (!user.isActive) throw new TRPCError({ code: "FORBIDDEN", message: "Account blocked. Contact support." });
-
-      const adminAuth = getFirebaseAdminAuth();
-      if (!adminAuth) {
-        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Password reset is not configured on the server. Please try again later." });
+      const tokenHash = hashResetToken(input.token);
+      const user = await ctx.db.user.findFirst({
+        where: {
+          passwordResetTokenHash: tokenHash,
+          passwordResetExpires: { gt: new Date() },
+        },
+        select: { id: true, email: true, isActive: true },
+      });
+      if (!user) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "This reset link is invalid or has expired. Please request a new one.",
+        });
       }
-      let decoded;
-      try {
-        decoded = await adminAuth.verifyIdToken(input.idToken);
-      } catch {
-        throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid or expired verification code. Please request a new OTP." });
-      }
-      const norm = (v: string) => v.replace(/\D/g, "").slice(-10);
-      if (norm(decoded.phone_number ?? "") !== norm(user.mobile)) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "You verified a different number than this account." });
+      if (!user.isActive) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Account blocked. Contact support." });
       }
 
       const salt = await genSalt(10);
-      const passwordHash = await hash(input.newPassword, salt);
-      await ctx.db.user.update({ where: { id: user.id }, data: { passwordHash } });
-      console.log(`[auth] password reset for ${user.id}`);
-      return { ok: true };
+      const passwordHash = await hash(input.password, salt);
+      const targets = user.email
+        ? await findActiveUsersByEmail(ctx.db, user.email)
+        : [{ id: user.id }];
+
+      // Using the e-mailed link proves ownership of the address, so the
+      // account's e-mail gate is cleared along with the password.
+      await ctx.db.user.updateMany({
+        where: { id: { in: targets.map((t) => t.id) } },
+        data: {
+          passwordHash,
+          passwordResetTokenHash: null,
+          passwordResetExpires: null,
+          isVerified: true,
+        },
+      });
+      console.log(`[auth] password reset completed for ${targets.length} account(s)`);
+      return { ok: true as const };
     }),
 
   register: publicProcedure
@@ -144,23 +237,23 @@ export const authRouter = createTRPCRouter({
         // Passwordless registration (sign in with Google); kept optional for
         // backwards compatibility with older clients.
         password: z.string().min(6).optional(),
-        role: z.enum(["CUSTOMER", "VENDOR", "AGENT"]).default("CUSTOMER"),
+        role: z.enum(["CUSTOMER", "VENDOR"]).default("CUSTOMER"),
         city: z.string().min(2),
         state: z.string().min(2),
         businessName: z.string().optional(),
         serviceCategories: z.array(z.string()).max(20).optional(),
         yearsOfExperience: z.number().int().min(0).max(60).optional(),
-        officeAddress: z.string().max(200).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
+      const email = input.email?.trim().toLowerCase();
       // Mobile is the global login key (unique across all roles). Email may
       // repeat across roles, but not twice within the SAME role.
       const existing = await ctx.db.user.findFirst({
         where: {
           OR: [
             { mobile: input.mobile },
-            ...(input.email ? [{ email: input.email, role: input.role }] : []),
+            ...(email ? [{ email, role: input.role }] : []),
           ],
         },
       });
@@ -180,7 +273,7 @@ export const authRouter = createTRPCRouter({
         data: {
           fullName: input.fullName,
           mobile: input.mobile,
-          email: input.email,
+          email,
           passwordHash,
           role: input.role,
           city: input.city,
@@ -211,10 +304,21 @@ export const authRouter = createTRPCRouter({
             basePricing: { basePrice: 299, emergencyCharge: 150, visitingCharge: 99 },
           },
         });
-      } else if (input.role === "AGENT") {
-        await ctx.db.agentProfile.create({
-          data: { userId: user.id, assignedCity: input.city, officeAddress: input.officeAddress ?? `${input.city} office`, commissionPercent: 5 },
-        });
+      }
+
+      // Branded welcome mail via Patra template #10. Fire-and-forget: mail
+      // outages must never fail or delay account creation.
+      if (email) {
+        void sendPatraTx({
+          templateId: PATRA_TX_WELCOME,
+          to: email,
+          data: {
+            name: firstName(input.fullName),
+            dashboardUrl: `${appUrl()}${input.role === "VENDOR" ? "/vendor" : "/services"}`,
+          },
+        }).catch((err) =>
+          console.error("[auth] welcome e-mail failed:", err instanceof Error ? err.message : err),
+        );
       }
 
       return { id: user.id, mobile: user.mobile, role: user.role };

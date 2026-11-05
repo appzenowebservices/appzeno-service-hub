@@ -1,8 +1,11 @@
 import { createTRPCRouter, adminProcedure, protectedProcedure } from "~/server/api/trpc";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { sendPushToUser, sendPushToUsers } from "~/server/notifications/notify";
+import type { Prisma, PrismaClient } from "@prisma/client";
+import { notifyUser, sendPushToUser, sendPushToUsers } from "~/server/notifications/notify";
+import { getPatraEmailStatus, subscribeToPatraLists } from "~/server/patra/client";
 import { resolveDbUserId } from "~/server/utils/db-user";
+import { isObjectId } from "~/server/utils/object-id";
 
 const CATALOG: { slug: string; name: string; icon: string; description: string; commissionPercent: number; rating: number; totalBookings: number; sortOrder: number; image?: string; featured?: boolean; subs: { name: string; basePrice: number; unit: string }[] }[] = [
   { slug: "home-cleaning", name: "Home Cleaning", icon: "🧹", description: "Kitchen, sofa, full-home packages", commissionPercent: 15, rating: 4.82, totalBookings: 12400, sortOrder: 1, image: "/images/hero/home-cleaning.png", featured: true, subs: [{ name: "1BHK deep cleaning", basePrice: 1999, unit: "per home" }, { name: "2BHK deep cleaning", basePrice: 2999, unit: "per home" }, { name: "Sofa + carpet shampoo", basePrice: 899, unit: "per set" }] },
@@ -25,17 +28,57 @@ function clean(v?: string): string | null {
   return t === "" ? null : t;
 }
 
+/** Patra list UUIDs used for e-mail confirmation, by role. */
+function listUuidsForRole(role: string): string[] {
+  const raw =
+    role === "AGENT"
+      ? process.env.OMNIPOST_AGENT_LIST_UUIDS
+      : role === "VENDOR"
+        ? process.env.OMNIPOST_VENDOR_LIST_UUIDS
+        : role === "CUSTOMER"
+          ? process.env.OMNIPOST_CUSTOMER_LIST_UUIDS
+          : "";
+  return (raw ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/** Applies the same flags as the Omnipost `subscriber.confirmed` webhook. */
+async function markEmailVerified(db: PrismaClient, user: { id: string; role: string }) {
+  await db.user.update({ where: { id: user.id }, data: { isVerified: true } });
+  if (user.role === "CUSTOMER") {
+    // CustomerProfile.isApproved means "e-mail confirmed" for customers (KYC
+    // is vendor-only), mirroring the webhook.
+    await db.customerProfile.updateMany({ where: { userId: user.id }, data: { isApproved: true } });
+  } else if (user.role === "AGENT") {
+    await db.agentProfile.updateMany({ where: { userId: user.id }, data: { isVerified: true } });
+  }
+}
+
 export const adminRouter = createTRPCRouter({
   stats: adminProcedure.query(async ({ ctx }) => {
-    const [totalUsers, totalBookings, totalCategories, completedBookings, pendingKyc, openDisputes] =
-      await Promise.all([
-        ctx.db.user.count(),
-        ctx.db.booking.count(),
-        ctx.db.category.count({ where: { isActive: true } }),
-        ctx.db.booking.count({ where: { status: "COMPLETED" } }),
-        ctx.db.vendorProfile.count({ where: { kycStatus: { in: ["PENDING", "UNDER_REVIEW"] } } }),
-        ctx.db.booking.count({ where: { status: "DISPUTED" } }),
-      ]);
+    const [
+      totalUsers, totalBookings, totalCategories, completedBookings,
+      pendingKyc, openDisputes, pendingBookings, walletTransactions, areas,
+    ] = await Promise.all([
+      ctx.db.user.count(),
+      ctx.db.booking.count(),
+      ctx.db.category.count({ where: { isActive: true } }),
+      ctx.db.booking.count({ where: { status: "COMPLETED" } }),
+      // Count pending KYC through the User relation, not the profile table:
+      // orphaned profiles must not inflate the sidebar while the queue is empty.
+      ctx.db.user.count({
+        where: {
+          role: "VENDOR",
+          vendorProfile: { is: { kycStatus: { in: ["PENDING", "UNDER_REVIEW"] } } },
+        },
+      }),
+      ctx.db.booking.count({ where: { status: "DISPUTED" } }),
+      ctx.db.booking.count({ where: { status: "PENDING" } }),
+      ctx.db.walletTransaction.count(),
+      ctx.db.servingArea.count(),
+    ]);
 
     const completed = await ctx.db.booking.findMany({
       where: { status: "COMPLETED" },
@@ -111,6 +154,9 @@ export const adminRouter = createTRPCRouter({
       totalCategories,
       pendingKyc,
       openDisputes,
+      pendingBookings,
+      walletTransactions,
+      areas,
       totalRevenue,
       platformFee,
       customers,
@@ -124,6 +170,27 @@ export const adminRouter = createTRPCRouter({
       revenueByCity: [...byCity.entries()].map(([city, v]) => ({ city, ...v })).sort((a, b) => b.revenue - a.revenue).slice(0, 6),
       recentBookings,
     };
+  }),
+
+  /**
+   * The KYC approval queue. It must use the exact same filter as
+   * `stats.pendingKyc` so the sidebar badge and the list never disagree.
+   */
+  pendingKycQueue: adminProcedure.query(async ({ ctx }) => {
+    const where: Prisma.UserWhereInput = {
+      role: "VENDOR",
+      vendorProfile: { is: { kycStatus: { in: ["PENDING", "UNDER_REVIEW"] } } },
+    };
+    const [vendors, total] = await Promise.all([
+      ctx.db.user.findMany({
+        where,
+        include: { vendorProfile: true },
+        orderBy: { createdAt: "desc" },
+        take: 200,
+      }),
+      ctx.db.user.count({ where }),
+    ]);
+    return { vendors, total };
   }),
 
   agentsOverview: adminProcedure.query(async ({ ctx }) => {
@@ -146,7 +213,10 @@ export const adminRouter = createTRPCRouter({
         id: a.id,
         fullName: a.fullName,
         mobile: a.mobile,
+        email: a.email,
+        mobileVerified: a.mobileVerified,
         city,
+        pincodes: a.agentProfile?.serviceAreaPincodes ?? [],
         isVerified: a.isVerified,
         commissionPercent: pct,
         cityBookings: cityRows.length,
@@ -155,6 +225,213 @@ export const adminRouter = createTRPCRouter({
       };
     });
   }),
+
+  /** Re-checks one account against Patra and flips isVerified if confirmed. */
+  syncEmailVerification: adminProcedure
+    .input(z.object({ id: z.string().min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      const user = await ctx.db.user.findUnique({
+        where: { id: input.id },
+        select: { id: true, email: true, role: true, isVerified: true },
+      });
+      if (!user) throw new TRPCError({ code: "NOT_FOUND", message: "User not found." });
+      if (user.isVerified) {
+        return { ok: true, verified: true, alreadyVerified: true, subscriptionStatus: null, subscriberStatus: null };
+      }
+      if (!user.email) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "This account has no e-mail address." });
+      }
+
+      const listUuids = listUuidsForRole(user.role);
+      if (listUuids.length === 0) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "No Patra list is configured for this role." });
+      }
+
+      let status;
+      try {
+        status = await getPatraEmailStatus(user.email, listUuids);
+      } catch (err) {
+        console.error("[patra-sync] status lookup failed:", err instanceof Error ? err.message : err);
+        throw new TRPCError({ code: "BAD_GATEWAY", message: "Could not read Patra subscriber status." });
+      }
+
+      if (status.confirmed) await markEmailVerified(ctx.db, user);
+      return { ok: true, verified: status.confirmed, alreadyVerified: false, ...status };
+    }),
+
+  /** Re-sends Patra's double opt-in confirmation e-mail for one account. */
+  sendEmailVerification: adminProcedure
+    .input(z.object({ id: z.string().min(1) }))
+    .mutation(async ({ ctx, input }) => {
+      const user = await ctx.db.user.findUnique({
+        where: { id: input.id },
+        select: { id: true, fullName: true, email: true, role: true, isVerified: true },
+      });
+      if (!user) throw new TRPCError({ code: "NOT_FOUND", message: "User not found." });
+      if (user.isVerified) return { ok: true, alreadyVerified: true };
+      if (!user.email) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "This account has no e-mail address." });
+      }
+
+      const result = await subscribeToPatraLists({
+        email: user.email,
+        name: user.fullName,
+        listUuids: listUuidsForRole(user.role),
+      });
+      if (!result.ok) {
+        throw new TRPCError({ code: "BAD_GATEWAY", message: result.message });
+      }
+      return { ok: true, alreadyVerified: false };
+    }),
+
+  /** Bulk recovery: sync every unverified account of one role with Patra. */
+  syncRoleEmailVerification: adminProcedure
+    .input(z.object({ role: z.enum(["CUSTOMER", "VENDOR", "AGENT"]) }))
+    .mutation(async ({ ctx, input }) => {
+      const listUuids = listUuidsForRole(input.role);
+      if (listUuids.length === 0) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "No Patra list is configured for this role." });
+      }
+
+      const users = await ctx.db.user.findMany({
+        where: { role: input.role, isActive: true, isVerified: false, email: { not: null } },
+        select: { id: true, email: true, role: true },
+        take: 100,
+      });
+
+      let verified = 0;
+      let failed = 0;
+      for (const user of users) {
+        try {
+          const status = await getPatraEmailStatus(user.email ?? "", listUuids);
+          if (status.confirmed) {
+            await markEmailVerified(ctx.db, user);
+            verified += 1;
+          }
+        } catch (err) {
+          failed += 1;
+          console.error("[patra-sync] bulk lookup failed:", err instanceof Error ? err.message : err);
+        }
+      }
+      return { checked: users.length, verified, failed };
+    }),
+
+  /**
+   * Superadmin-only agent provisioning. Agents no longer self-register from
+   * /auth/register; the account is passwordless and signs in with Google using
+   * this email (or via the mobile OTP flow).
+   */
+  createAgent: adminProcedure
+    .input(
+      z.object({
+        fullName: z.string().min(2),
+        mobile: z.string().regex(/^[6-9]\d{9}$/, "Enter a valid 10-digit mobile"),
+        email: z.string().email(),
+        // City comes from the Areas & Pincodes registry (not free text).
+        areaId: z.string(),
+        // Subset of the city's pincodes the agent will monitor.
+        pincodes: z.array(z.string().regex(/^\d{6}$/)).min(1).max(300),
+        officeAddress: z.string().min(2),
+        commissionPercent: z.number().min(0).max(50).default(5),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!isObjectId(input.areaId)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Select a city from Areas & Pincodes." });
+      }
+      const area = await ctx.db.servingArea.findUnique({ where: { id: input.areaId } });
+      if (!area || !area.isActive) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "That city/area is not active. Pick another from Areas & Pincodes." });
+      }
+      const invalid = input.pincodes.filter((p) => !area.pincodes.includes(p));
+      if (invalid.length > 0) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `These pincodes are not in ${area.city}: ${invalid.join(", ")}` });
+      }
+
+      const mobileTaken = await ctx.db.user.findFirst({ where: { mobile: input.mobile.trim() }, select: { id: true } });
+      if (mobileTaken) throw new TRPCError({ code: "CONFLICT", message: "This mobile number is already registered." });
+      const emailTaken = await ctx.db.user.findFirst({ where: { email: input.email.trim(), role: "AGENT" }, select: { id: true } });
+      if (emailTaken) throw new TRPCError({ code: "CONFLICT", message: "An agent with this email already exists." });
+
+      const agent = await ctx.db.user.create({
+        data: {
+          fullName: input.fullName.trim(),
+          mobile: input.mobile.trim(),
+          email: input.email.trim().toLowerCase(),
+          role: "AGENT",
+          city: area.city,
+          state: area.state,
+          // Admin-provisioned: the email is trusted (no Omnipost gate).
+          isVerified: true,
+          agentProfile: {
+            create: {
+              assignedCity: area.city,
+              officeAddress: input.officeAddress.trim(),
+              commissionPercent: input.commissionPercent,
+              // Assign the exact pincodes the superadmin picked for this city.
+              serviceAreaPincodes: input.pincodes,
+            },
+          },
+        },
+        select: { id: true, fullName: true, mobile: true, email: true },
+      });
+
+      await notifyUser(ctx.db, {
+        userId: agent.id,
+        type: "system",
+        title: "Welcome to ADDies 🎉",
+        message: `Your ${area.city} agent account is ready with ${input.pincodes.length} pincode(s). Sign in with Google using this email.`,
+        actionUrl: "/agent",
+      });
+
+      console.log(`[admin] agent created ${agent.id} (${agent.mobile}) for ${area.city} — ${input.pincodes.length} pincodes`);
+      return agent;
+    }),
+
+  /** Re-assign an existing agent's city + pincode coverage. */
+  updateAgentArea: adminProcedure
+    .input(
+      z.object({
+        id: z.string(),
+        areaId: z.string(),
+        pincodes: z.array(z.string().regex(/^\d{6}$/)).min(1).max(300),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (!isObjectId(input.id) || !isObjectId(input.areaId)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid agent or area." });
+      }
+      const area = await ctx.db.servingArea.findUnique({ where: { id: input.areaId } });
+      if (!area || !area.isActive) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "That city/area is not active. Pick another from Areas & Pincodes." });
+      }
+      const invalid = input.pincodes.filter((p) => !area.pincodes.includes(p));
+      if (invalid.length > 0) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: `These pincodes are not in ${area.city}: ${invalid.join(", ")}` });
+      }
+      const agent = await ctx.db.user.findFirst({
+        where: { id: input.id, role: "AGENT" },
+        select: { id: true, fullName: true, agentProfile: { select: { id: true } } },
+      });
+      if (!agent?.agentProfile) throw new TRPCError({ code: "NOT_FOUND", message: "Agent not found." });
+
+      await ctx.db.$transaction([
+        ctx.db.user.update({ where: { id: agent.id }, data: { city: area.city, state: area.state } }),
+        ctx.db.agentProfile.update({
+          where: { id: agent.agentProfile.id },
+          data: { assignedCity: area.city, serviceAreaPincodes: input.pincodes },
+        }),
+      ]);
+      await notifyUser(ctx.db, {
+        userId: agent.id,
+        type: "system",
+        title: "Territory updated 📍",
+        message: `Your area is now ${area.city} with ${input.pincodes.length} pincode(s).`,
+        actionUrl: "/agent",
+      });
+      console.log(`[admin] agent ${agent.id} territory updated → ${area.city} (${input.pincodes.length} pincodes)`);
+      return { ok: true };
+    }),
 
   walletTx: adminProcedure
     .input(z.object({ limit: z.number().min(1).max(100).default(20) }))

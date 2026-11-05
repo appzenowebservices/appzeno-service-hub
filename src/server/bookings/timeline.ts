@@ -3,6 +3,7 @@ import type { PrismaClient } from "@prisma/client";
 interface EventInput {
   bookingId: string;
   status: string;
+  action?: string;
   actorRole?: string;
   actorId?: string | null;
   note?: string | null;
@@ -15,6 +16,7 @@ export async function logBookingEvent(db: PrismaClient, input: EventInput): Prom
       data: {
         bookingId: input.bookingId,
         status: input.status,
+        action: input.action ?? "STATUS",
         actorRole: input.actorRole ?? "SYSTEM",
         actorId: input.actorId ?? null,
         note: input.note ?? null,

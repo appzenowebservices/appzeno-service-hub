@@ -3,27 +3,87 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { signOut, useSession } from "next-auth/react";
 import {
   LayoutDashboard, UserCheck, CalendarClock, Store, Users, MapPinned, Tags, Wallet,
   Megaphone, Search, Check, Ban, RefreshCw, Plus, LogOut, IndianRupee, TrendingUp,
-  Clock, AlertTriangle, Star, ExternalLink, Receipt, Send, Globe, ChevronRight, Bell, Loader2,
-  CheckCircle2, XCircle, X, Wrench, MapPin, Phone, UserCircle,
+  Clock, AlertTriangle, AlertCircle, Star, ExternalLink, Receipt, Send, Globe, ChevronRight, Bell, Loader2,
+  CheckCircle2, XCircle, X, Wrench, MapPin, UserCircle, Trash2, ShieldCheck, UserX, Mail,
 } from "lucide-react";
 import { trpc } from "~/trpc/react";
 import { generateReactHelpers } from "@uploadthing/react";
 import type { OurFileRouter } from "~/app/uploadthing";
 import { LoadingConsole, StatSkeleton, ChartSkeleton, ListSkeleton, InlineSync } from "~/app/admin/components/loaders";
 import ServingAreasMap, { geocodePincode, type AreaPin } from "~/app/admin/components/ServingAreasMap";
+import AgentTerritoryPicker from "~/app/admin/components/AgentTerritoryPicker";
 
 const { useUploadThing } = generateReactHelpers<OurFileRouter>();
 
-type Tab = "overview" | "approvals" | "bookings" | "vendors" | "users" | "agents" | "categories" | "areas" | "finance" | "broadcast";
+type Tab = "overview" | "approvals" | "bookings" | "vendors" | "customers" | "agents" | "categories" | "areas" | "finance" | "broadcast";
 
 const STATUSES = ["ALL", "PENDING", "ASSIGNED", "ACCEPTED", "IN_PROGRESS", "COMPLETED", "CANCELLED", "DISPUTED"] as const;
 const SET_STATUSES = ["PENDING", "ASSIGNED", "ACCEPTED", "IN_PROGRESS", "COMPLETED", "CANCELLED", "DISPUTED"] as const;
-const USER_ROLES = ["ALL", "CUSTOMER", "VENDOR", "AGENT", "ADMIN"] as const;
+const ROLE_CHIP: Record<string, string> = {
+  CUSTOMER: "chip chip-primary",
+  VENDOR: "chip chip-accent",
+  AGENT: "chip chip-success",
+  ADMIN: "chip chip-danger",
+};
+const initialsOf = (name: string) =>
+  name.split(/\s+/).filter(Boolean).map((p) => p[0]).slice(0, 2).join("").toUpperCase() || "?";
+
+/** Compact sidebar badge text: 1,234 → 1.2k, 12,345 → 12k. */
+const fmtBadge = (n: number) =>
+  n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1).replace(/\.0$/, "")}k` : String(n);
+
+/**
+ * Customer avatar for the admin table. Remote avatars are proxied through
+ * Next's image optimizer (Google's lh3 host is often blocked by privacy
+ * extensions), with an initials fallback if loading fails.
+ */
+function AdminCustomerAvatar({ src, name, active }: { src?: string | null; name: string; active: boolean }) {
+  const [failed, setFailed] = useState(false);
+  if (!src || failed) {
+    return (
+      <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-xs font-extrabold ring-1 ${active ? "bg-primary-50 text-primary-700 ring-primary-100" : "bg-danger-soft text-danger ring-danger/15"}`}>
+        {initialsOf(name)}
+      </span>
+    );
+  }
+  if (!/^https?:\/\//i.test(src)) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={src}
+        alt={name}
+        onError={() => setFailed(true)}
+        className={`h-10 w-10 shrink-0 rounded-full object-cover ring-1 ${active ? "ring-primary-100" : "opacity-60 ring-danger/15"}`}
+      />
+    );
+  }
+  return (
+    <Image
+      src={src}
+      alt={name}
+      width={40}
+      height={40}
+      referrerPolicy="no-referrer"
+      onError={() => setFailed(true)}
+      className={`h-10 w-10 shrink-0 rounded-full object-cover ring-1 ${active ? "ring-primary-100" : "opacity-60 ring-danger/15"}`}
+    />
+  );
+}
+
+const EMPTY_AGENT = {
+  fullName: "",
+  mobile: "",
+  email: "",
+  areaId: "",
+  pincodes: [] as string[],
+  officeAddress: "",
+  commissionPercent: "5",
+};
 
 const STATUS_STYLE: Record<string, string> = {
   PENDING: "chip chip-accent",
@@ -44,6 +104,7 @@ const STATUS_STYLE: Record<string, string> = {
 interface StatsData {
   totalRevenue: number; platformFee: number; totalBookings: number; completedBookings: number;
   customers: number; vendors: number; agents: number; pendingKyc: number; openDisputes: number;
+  pendingBookings: number; walletTransactions: number; areas: number;
   avgOrderValue: number; todayCount: number; walletLiability: number;
   byStatus: Record<string, number>;
   trend: { day: string; revenue: number; bookings: number }[];
@@ -52,6 +113,7 @@ interface StatsData {
 }
 interface VendorRow {
   id: string; fullName: string; mobile: string; city: string; isActive: boolean; isVerified: boolean;
+  email?: string | null; mobileVerified?: boolean;
   vendorProfile?: { businessName: string; kycStatus: string; isApproved: boolean; subscriptionPlan: string; rating: number; totalReviews: number; serviceCategories: string[]; yearsOfExperience: number; gst?: string | null; aadhaarDoc?: string | null; panDoc?: string | null; profilePhoto?: string | null } | null;
 }
 interface BookingRow {  id: string; status: string; paymentStatus: string; totalAmount: number; description: string;
@@ -60,9 +122,11 @@ interface BookingRow {  id: string; status: string; paymentStatus: string; total
 }
 interface UserRow {
   id: string; fullName: string; mobile: string; role: string; city: string; isActive: boolean;
+  email?: string | null; isVerified: boolean; mobileVerified: boolean;
+  avatar?: string | null;
   customerProfile?: { walletBalance: number } | null;
 }
-interface AgentRow { id: string; fullName: string; mobile: string; city: string; isVerified: boolean; commissionPercent: number; cityBookings: number; cityGmv: number; commissionEarned: number }
+interface AgentRow { id: string; fullName: string; mobile: string; email?: string | null; mobileVerified?: boolean; city: string; isVerified: boolean; commissionPercent: number; cityBookings: number; cityGmv: number; commissionEarned: number; pincodes: string[] }
 interface CatRow { id: string; slug: string; name: string; icon: string; image?: string | null; rating: number; totalBookings: number; isFeatured: boolean; sortOrder: number; isActive: boolean; commissionPercent: number; subCategories: { id: string; name: string; basePrice: number; unit: string }[] }
 interface TxRow { id: string; type: string; amount: number; description: string; balanceAfter: number; createdAt: string | Date; user: { fullName: string; mobile: string; role: string } }
 interface NotifRow { id: string; title: string; message: string; type: string; createdAt: string | Date; image?: string | null }
@@ -84,9 +148,10 @@ interface DetailData {
     createdAt: string | Date;
     customer?: { fullName: string; mobile: string; email?: string | null; city?: string } | null;
     vendor?: { id: string; fullName: string; mobile: string; email?: string | null; city?: string; isVerified?: boolean; vendorProfile?: { businessName?: string; rating?: number; totalReviews?: number; kycStatus?: string; isApproved?: boolean } | null } | null;
+    agent?: { id: string; fullName: string; mobile?: string | null } | null;
     Review?: { rating: number; comment?: string | null; createdAt: string | Date }[];
     Lead?: { status: string; expiresAt: string | Date; createdAt: string | Date }[];
-    events?: { id: string; status: string; actorRole: string; note?: string | null; createdAt: string | Date }[];
+    events?: { id: string; status: string; action?: string | null; actorRole: string; note?: string | null; createdAt: string | Date }[];
   };
   agents: { id: string; assignedCity: string; serviceAreaPincodes: string[]; user?: { fullName: string; mobile: string; city?: string; isVerified?: boolean } | null }[];
 }
@@ -274,13 +339,19 @@ export default function AdminPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
   const utils = trpc.useUtils();
-  const [tab, setTab] = useState<Tab>("overview");
+  // Route-driven tabs: /admin, /admin/bookings, /admin/customers, …
+  const params = useParams();
+  const rawSection = params?.section;
+  const sectionParam = Array.isArray(rawSection) ? rawSection[0] : rawSection;
+  const TAB_KEYS: Tab[] = ["overview", "approvals", "bookings", "vendors", "customers", "agents", "categories", "areas", "finance", "broadcast"];
+  // "/admin/users" kept as a legacy alias for bookmarks/links.
+  const requestedSection = sectionParam === "users" ? "customers" : sectionParam;
+  const tab: Tab = requestedSection && TAB_KEYS.includes(requestedSection as Tab) ? (requestedSection as Tab) : "overview";
+  const goTab = (t: Tab) => router.push(t === "overview" ? "/admin" : `/admin/${t}`);
   const [loggingOut, setLoggingOut] = useState<"confirm" | "signedout" | null>(null);
   const [bookingStatus, setBookingStatus] = useState<(typeof STATUSES)[number]>("ALL");
   const [bookingSearch, setBookingSearch] = useState("");
-  const [userRole, setUserRole] = useState<(typeof USER_ROLES)[number]>("ALL");
-  const [userSearch, setUserSearch] = useState("");
-  const [userSearchDeb, setUserSearchDeb] = useState("");
+  const [userSearch, setUserSearch] = useState("");  const [userSearchDeb, setUserSearchDeb] = useState("");
   const [vendorSearch, setVendorSearch] = useState("");
   const [assignSel, setAssignSel] = useState<Record<string, string>>({});
   const [statusSel, setStatusSel] = useState<Record<string, string>>({});
@@ -291,6 +362,12 @@ export default function AdminPage() {
   const [bLink, setBLink] = useState("");
   const [bNote, setBNote] = useState("");
   const [detailId, setDetailId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<UserRow | null>(null);
+  const [agentModal, setAgentModal] = useState(false);
+  const [agentForm, setAgentForm] = useState({ ...EMPTY_AGENT });
+  const [agentErr, setAgentErr] = useState("");
+  const [editAgent, setEditAgent] = useState<AgentRow | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [newCat, setNewCat] = useState({ name: "", icon: "🔧", commission: "10", description: "" });
   const [subForm, setSubForm] = useState({ catId: "", name: "", price: "", unit: "per job" });
   const [catSearch, setCatSearch] = useState("");
@@ -312,21 +389,22 @@ export default function AdminPage() {
   const myMobile = (session?.user as { mobile?: string } | undefined)?.mobile ?? "";
 
   const statsQ = trpc.admin.stats.useQuery(undefined, { enabled: authed && role === "ADMIN" });
-  const vendorsQ = trpc.vendors.list.useQuery({ limit: 50 }, { enabled: authed && (tab === "approvals" || tab === "vendors" || tab === "bookings") });
+  const pendingKycQ = trpc.admin.pendingKycQueue.useQuery(undefined, { enabled: authed && (tab === "approvals" || tab === "overview") });
+  const vendorsQ = trpc.vendors.list.useQuery({ limit: 50 }, { enabled: authed && (tab === "vendors" || tab === "bookings") });
   const bookingsQ = trpc.bookings.listAll.useQuery(
     { status: bookingStatus === "ALL" ? undefined : bookingStatus, limit: 50 },
     { enabled: authed && (tab === "bookings" || tab === "overview") },
   );
   const disputesQ = trpc.bookings.listAll.useQuery({ status: "DISPUTED", limit: 10 }, { enabled: authed && tab === "overview" });
   const usersQ = trpc.users.getAll.useQuery(
-    { role: userRole === "ALL" ? undefined : userRole as "CUSTOMER", search: userSearchDeb === "" ? undefined : userSearchDeb, limit: 30 },
-    { enabled: authed && tab === "users" },
+    { role: "CUSTOMER", search: userSearchDeb === "" ? undefined : userSearchDeb, limit: 30 },
+    { enabled: authed && tab === "customers" },
   );
   const agentsQ = trpc.admin.agentsOverview.useQuery(undefined, { enabled: authed && tab === "agents" });
   const catsQ = trpc.categories.getAll.useQuery({ includeInactive: true }, { enabled: authed && tab === "categories" });
   const walletQ = trpc.admin.walletTx.useQuery({ limit: 25 }, { enabled: authed && tab === "finance" });
   const notifsQ = trpc.admin.notifications.useQuery({ limit: 10 }, { enabled: authed && tab === "broadcast" });
-  const detailQ = trpc.bookings.adminDetail.useQuery({ id: detailId ?? "" }, { enabled: authed && !!detailId });  const areasQ = trpc.areas.getAll.useQuery(undefined, { enabled: authed && tab === "areas" });
+  const detailQ = trpc.bookings.adminDetail.useQuery({ id: detailId ?? "" }, { enabled: authed && !!detailId });  const areasQ = trpc.areas.getAll.useQuery(undefined, { enabled: authed && (tab === "areas" || tab === "agents") });
 
   const refreshAll = () => {
     void utils.invalidate();
@@ -340,7 +418,19 @@ export default function AdminPage() {
   const seedAreas = trpc.areas.seed.useMutation({ onSuccess: () => void areasQ.refetch() });
 
   const toggleUser = trpc.users.toggleActive.useMutation({ onSuccess: () => void usersQ.refetch() });
-  const approveVendor = trpc.vendors.approveVendor.useMutation({ onSuccess: () => { void vendorsQ.refetch(); void statsQ.refetch(); } });
+  const deleteUser = trpc.users.deleteUser.useMutation({
+    onSuccess: () => {
+      void usersQ.refetch();
+      setDeleteTarget(null);
+      setDeleteError(null);
+    },
+    onError: (e) => setDeleteError(e.message),
+  });
+  const openDeleteUser = (u: UserRow) => {
+    setDeleteError(null);
+    setDeleteTarget(u);
+  };
+  const approveVendor = trpc.vendors.approveVendor.useMutation({ onSuccess: () => { void pendingKycQ.refetch(); void vendorsQ.refetch(); void statsQ.refetch(); } });
   const toggleVendor = trpc.vendors.toggleActive.useMutation({ onSuccess: () => void vendorsQ.refetch() });
   const updateBooking = trpc.bookings.updateStatus.useMutation({ onSuccess: () => { void bookingsQ.refetch(); void disputesQ.refetch(); void statsQ.refetch(); } });
   const assignVendor = trpc.bookings.assignVendor.useMutation({ onSuccess: () => { void bookingsQ.refetch(); void statsQ.refetch(); } });
@@ -351,7 +441,49 @@ export default function AdminPage() {
   const updateCat = trpc.admin.updateCategory.useMutation({ onSuccess: () => void catsQ.refetch() });
   const seedCats = trpc.admin.seedCategories.useMutation({ onSuccess: () => void catsQ.refetch() });
   const updateComm = trpc.admin.updateAgentCommission.useMutation({ onSuccess: () => void agentsQ.refetch() });
+  const createAgent = trpc.admin.createAgent.useMutation({
+    onSuccess: () => {
+      void agentsQ.refetch();
+      setAgentModal(false);
+      setAgentErr("");
+      setEditAgent(null);
+      setAgentForm({ ...EMPTY_AGENT });
+    },
+    onError: (e) => setAgentErr(e.message),
+  });
+  const updateAgentArea = trpc.admin.updateAgentArea.useMutation({
+    onSuccess: () => {
+      void agentsQ.refetch();
+      setAgentModal(false);
+      setAgentErr("");
+      setEditAgent(null);
+      setAgentForm({ ...EMPTY_AGENT });
+    },
+    onError: (e) => setAgentErr(e.message),
+  });
   const remindKyc = trpc.vendors.remindKyc.useMutation({ onSuccess: () => alert("Reminder sent to the vendor's notifications.") });
+  const syncEmail = trpc.admin.syncEmailVerification.useMutation({
+    onSuccess: (d) => {
+      void vendorsQ.refetch();
+      void usersQ.refetch();
+      void agentsQ.refetch();
+      if (d.verified && !d.alreadyVerified) alert("Patra confirms this e-mail — marked verified.");
+    },
+    onError: (e) => alert(`Patra sync failed: ${e.message}`),
+  });
+  const resendEmail = trpc.admin.sendEmailVerification.useMutation({
+    onSuccess: () => alert("Patra sent a fresh confirmation e-mail."),
+    onError: (e) => alert(`Could not send verification e-mail: ${e.message}`),
+  });
+  const syncRoleEmails = trpc.admin.syncRoleEmailVerification.useMutation({
+    onSuccess: (d) => {
+      void vendorsQ.refetch();
+      void usersQ.refetch();
+      void agentsQ.refetch();
+      alert(`Patra sync complete — checked ${d.checked}, verified ${d.verified}${d.failed ? `, failed ${d.failed}` : ""}.`);
+    },
+    onError: (e) => alert(`Patra sync failed: ${e.message}`),
+  });
   const broadcast = trpc.admin.broadcast.useMutation({ onSuccess: () => void notifsQ.refetch() });
   const sendTestPush = trpc.admin.sendTestPush.useMutation({
     onSuccess: (d) => setBNote(d.devices > 0 ? `✓ Test push sent to ${d.devices} of your device(s).` : "No devices registered for your account — enable notifications in the app first."),
@@ -360,7 +492,8 @@ export default function AdminPage() {
 
   const stats = statsQ.data as StatsData | undefined;
   const vendors = useMemo(() => ((vendorsQ.data as { vendors?: VendorRow[] } | undefined)?.vendors ?? []), [vendorsQ.data]);
-  const pendingKyc = useMemo(() => vendors.filter((v) => !v.vendorProfile?.isApproved), [vendors]);
+  const pendingKyc = useMemo(() => ((pendingKycQ.data?.vendors ?? []) as VendorRow[]), [pendingKycQ.data]);
+  const pendingKycTotal = pendingKycQ.data?.total ?? pendingKyc.length;
   const approvedVendors = useMemo(() => vendors.filter((v) => v.vendorProfile?.isApproved && v.isActive), [vendors]);
   const bookings = useMemo(() => {
     const list = ((bookingsQ.data as { bookings?: BookingRow[] } | undefined)?.bookings ?? []);
@@ -429,23 +562,28 @@ export default function AdminPage() {
   };
   if (status !== "authenticated" || role !== "ADMIN") {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-surface">
-        <p className="font-bold text-ink">Super Admin access required</p>
-        <button onClick={() => router.push("/auth/login")} className="btn-primary">Go to Login</button>
+      <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-surface px-4 text-center">
+        <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-primary-50">
+          <ShieldCheck size={24} className="text-primary-600" />
+        </span>
+        <p className="text-lg font-extrabold tracking-tight text-ink">Super Admin access required</p>
+        <p className="sub max-w-sm">This console is restricted to the environment-configured superadmin account.</p>
+        <button onClick={() => router.push("/auth/superadmin")} className="btn-primary mt-2">Super admin login</button>
+        <button onClick={() => router.push("/auth/login")} className="text-xs font-bold text-muted transition-colors hover:text-ink">Standard user login</button>
       </div>
     );
   }
 
-  const NAV: { key: Tab; label: string; Icon: typeof LayoutDashboard; badge?: number }[] = [
+  const NAV: { key: Tab; label: string; Icon: typeof LayoutDashboard; badge?: number; tone?: "alert" | "danger" }[] = [
     { key: "overview", label: "Overview", Icon: LayoutDashboard },
-    { key: "approvals", label: "KYC Approvals", Icon: UserCheck, badge: stats?.pendingKyc },
-    { key: "bookings", label: "Bookings", Icon: CalendarClock, badge: stats?.openDisputes },
-    { key: "vendors", label: "Vendors", Icon: Store },
-    { key: "users", label: "Users", Icon: Users },
-    { key: "agents", label: "Agents", Icon: MapPinned },
-    { key: "categories", label: "Categories", Icon: Tags },
-    { key: "areas", label: "Areas & Pincodes", Icon: MapPinned },
-    { key: "finance", label: "Finance", Icon: Wallet },
+    { key: "approvals", label: "KYC Approvals", Icon: UserCheck, badge: stats?.pendingKyc, tone: "alert" },
+    { key: "bookings", label: "Bookings", Icon: CalendarClock, badge: stats ? stats.pendingBookings + stats.openDisputes : undefined, tone: "danger" },
+    { key: "vendors", label: "Vendors", Icon: Store, badge: stats?.vendors },
+    { key: "customers", label: "Customers", Icon: Users, badge: stats?.customers },
+    { key: "agents", label: "Agents", Icon: MapPinned, badge: stats?.agents },
+    { key: "categories", label: "Categories", Icon: Tags, badge: stats?.totalCategories },
+    { key: "areas", label: "Areas & Pincodes", Icon: MapPinned, badge: stats?.areas },
+    { key: "finance", label: "Finance", Icon: Wallet, badge: stats?.walletTransactions },
     { key: "broadcast", label: "Broadcast", Icon: Megaphone },
   ];
 
@@ -457,23 +595,23 @@ export default function AdminPage() {
           <Image src="/logo.png" alt="ADDies" width={36} height={36} className="h-9 w-9 rounded-xl bg-white object-contain p-0.5" />
           <div className="leading-none">
             <p className="text-[15px] font-extrabold">ADDies Ops</p>
-            <p className="mt-0.5 text-[10px] font-bold uppercase tracking-[0.18em] text-accent-300">{isEnvRoot ? "Env root • full control" : "Super Admin • full control"}</p>
+            <p className="mt-0.5 text-[10px] font-bold uppercase tracking-[0.18em] text-accent-300">{isEnvRoot ? "Super Admin Panel" : "Super Admin • full control"}</p>
           </div>
         </div>
         <nav className="flex-1 space-y-1 overflow-y-auto px-3">
-          {NAV.map(({ key, label, Icon, badge }) => (
-            <button
+          {NAV.map(({ key, label, Icon, badge, tone }) => (
+            <Link
               key={key}
-              onClick={() => setTab(key)}
+              href={key === "overview" ? "/admin" : `/admin/${key}`}
               className={`flex w-full items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm font-bold transition-all ${tab === key ? "bg-white text-ink shadow-sm" : "text-slate-300 hover:bg-white/10 hover:text-white"}`}
             >
               <Icon size={17} className={tab === key ? "text-primary-600" : ""} />
               <span className="flex-1 text-left">{label}</span>
               {badge !== undefined && badge > 0 ? (
-                <span className={`rounded-full px-2 py-0.5 text-[11px] font-extrabold ${key === "bookings" ? "bg-danger text-white" : "bg-accent-400 text-accent-ink"}`}>{badge}</span>
+                <span className={`rounded-full px-2 py-0.5 text-[11px] font-extrabold ${tone === "danger" ? "bg-danger text-white" : tone === "alert" ? "bg-accent-400 text-accent-ink" : tab === key ? "bg-primary-50 text-primary-700" : "bg-white/10 text-slate-300"}`}>{fmtBadge(badge)}</span>
               ) : null}
               {tab === key ? <ChevronRight size={14} className="text-muted" /> : null}
-            </button>
+            </Link>
           ))}
         </nav>
         <div className="space-y-1 p-3">
@@ -497,9 +635,9 @@ export default function AdminPage() {
           </div>
           <nav className="no-scrollbar flex gap-1.5 overflow-x-auto px-3 pb-2.5">
             {NAV.map(({ key, label, badge }) => (
-              <button key={key} onClick={() => setTab(key)} className={`tab-pill shrink-0 !text-[13px] ${tab === key ? "tab-pill-active" : "tab-pill-idle"}`}>
-                {label}{badge !== undefined && badge > 0 ? ` (${badge})` : ""}
-              </button>
+              <Link key={key} href={key === "overview" ? "/admin" : `/admin/${key}`} className={`tab-pill shrink-0 !text-[13px] ${tab === key ? "tab-pill-active" : "tab-pill-idle"}`}>
+                {label}{badge !== undefined && badge > 0 ? ` (${fmtBadge(badge)})` : ""}
+              </Link>
             ))}
           </nav>
         </header>
@@ -564,7 +702,7 @@ export default function AdminPage() {
                         {SET_STATUSES.map((s) => {
                           const n = stats.byStatus[s] ?? 0;
                           return (
-                            <button key={s} onClick={() => { setBookingStatus(s); setTab("bookings"); }} className="group block w-full text-left">
+                            <button key={s} onClick={() => { setBookingStatus(s); goTab("bookings"); }} className="group block w-full text-left">
                               <div className="mb-1 flex items-center justify-between text-[13px]">
                                 <span className="font-bold text-body group-hover:text-primary-700">{s.replace(/_/g, " ")}</span>
                                 <span className="font-extrabold text-ink">{n}</span>
@@ -583,7 +721,7 @@ export default function AdminPage() {
                     <Card>
                       <div className="mb-3 flex items-center justify-between">
                         <p className="font-extrabold text-ink">Needs attention</p>
-                        <button onClick={() => setTab("approvals")} className="text-[13px] font-bold text-primary-600 hover:text-primary-700">Open queue →</button>
+                        <button onClick={() => goTab("approvals")} className="text-[13px] font-bold text-primary-600 hover:text-primary-700">Open queue →</button>
                       </div>
                       {pendingKyc.length === 0 && disputes.length === 0 ? (
                         <Empty title="All clear" hint="No pending KYC applications or open disputes right now." />
@@ -592,13 +730,13 @@ export default function AdminPage() {
                           {pendingKyc.slice(0, 3).map((v) => (
                             <div key={v.id} className="flex items-center justify-between gap-2 rounded-xl bg-accent-50 px-3 py-2 text-sm">
                               <span className="font-bold text-body">KYC: {v.vendorProfile?.businessName ?? v.fullName}</span>
-                              <button onClick={() => setTab("approvals")} className="shrink-0 text-[13px] font-extrabold text-accent-600">Review →</button>
+                              <button onClick={() => goTab("approvals")} className="shrink-0 text-[13px] font-extrabold text-accent-600">Review →</button>
                             </div>
                           ))}
                           {disputes.slice(0, 3).map((b) => (
                             <div key={b.id} className="flex items-center justify-between gap-2 rounded-xl bg-danger-soft px-3 py-2 text-sm">
                               <span className="font-bold text-body">Dispute: {b.id.slice(-6)} • {inr(b.totalAmount)}</span>
-                              <button onClick={() => { setBookingStatus("DISPUTED"); setTab("bookings"); }} className="shrink-0 text-[13px] font-extrabold text-danger">Resolve →</button>
+                              <button onClick={() => { setBookingStatus("DISPUTED"); goTab("bookings"); }} className="shrink-0 text-[13px] font-extrabold text-danger">Resolve →</button>
                             </div>
                           ))}
                         </div>
@@ -630,7 +768,7 @@ export default function AdminPage() {
           {tab === "approvals" && (
             <Card>
               <div className="mb-1 flex items-center justify-between">
-                <p className="font-extrabold text-ink">KYC & vendor approvals <span className="chip chip-accent ml-2">{pendingKyc.length} pending</span></p>
+                <p className="font-extrabold text-ink">KYC & vendor approvals <span className="chip chip-accent ml-2">{pendingKycTotal} pending</span></p>
                 {vendorsQ.isFetching ? <InlineSync label="Syncing" /> : null}
               </div>
               <p className="sub mb-4">Review what the vendor submitted, see what&apos;s missing, then approve or nudge them with a reminder.</p>
@@ -798,6 +936,11 @@ export default function AdminPage() {
                         </div>
                         <div className="rounded-2xl border border-line p-3">
                           <p className="mb-1.5 flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-wider text-muted"><MapPinned size={13} /> Area agent(s)</p>
+                          {b.agent ? (
+                            <p className="mb-1.5 rounded-lg bg-primary-50 px-2 py-1 text-[11px] font-bold text-primary-700">
+                              Primary: {b.agent.fullName}{b.agent.mobile ? ` · ${b.agent.mobile}` : ""}
+                            </p>
+                          ) : null}
                           {d.agents.length === 0 ? (
                             <p className="text-xs text-muted">No agent covers {addr.pincode ?? "this pincode"}.</p>
                           ) : (
@@ -874,6 +1017,14 @@ export default function AdminPage() {
                   <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
                   <input value={vendorSearch} onChange={(e) => setVendorSearch(e.target.value)} placeholder="Search business, name, city…" className="input !pl-9 !py-2" />
                 </label>
+                <button
+                  onClick={() => syncRoleEmails.mutate({ role: "VENDOR" })}
+                  disabled={syncRoleEmails.isPending}
+                  className="btn-ghost !px-3.5 !py-2 !text-xs disabled:opacity-50"
+                >
+                  {syncRoleEmails.isPending ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+                  Sync with Patra
+                </button>
               </div>
               {vendorRows.length === 0 ? (
                 <Card>
@@ -910,6 +1061,9 @@ export default function AdminPage() {
                           <span className={v.isVerified ? "chip chip-success" : "chip chip-neutral"}>
                             {v.isVerified ? "✓ Email verified" : "Email unverified"}
                           </span>
+                          <span className={v.mobileVerified ? "chip chip-success" : "chip chip-neutral"}>
+                            {v.mobileVerified ? "Mobile verified" : "Mobile unverified"}
+                          </span>
                           <span className={v.vendorProfile?.isApproved ? "chip chip-primary" : "chip chip-accent"}>
                             {v.vendorProfile?.isApproved ? "✓ KYC approved" : `KYC ${v.vendorProfile?.kycStatus ?? "PENDING"}`}
                           </span>
@@ -930,6 +1084,24 @@ export default function AdminPage() {
                         </div>
 
                         <div className="mt-3 flex flex-wrap gap-1.5 border-t border-slate-100 pt-3">
+                          {!v.isVerified && v.email ? (
+                            <>
+                              <button
+                                onClick={() => resendEmail.mutate({ id: v.id })}
+                                disabled={resendEmail.isPending && resendEmail.variables?.id === v.id}
+                                className="btn-ghost !px-3.5 !py-1.5 !text-xs disabled:opacity-50"
+                              >
+                                {resendEmail.isPending && resendEmail.variables?.id === v.id ? <Loader2 size={13} className="animate-spin" /> : <Mail size={13} />} Resend e-mail
+                              </button>
+                              <button
+                                onClick={() => syncEmail.mutate({ id: v.id })}
+                                disabled={syncEmail.isPending && syncEmail.variables?.id === v.id}
+                                className="btn-ghost !px-3.5 !py-1.5 !text-xs disabled:opacity-50"
+                              >
+                                {syncEmail.isPending && syncEmail.variables?.id === v.id ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />} Sync
+                              </button>
+                            </>
+                          ) : null}
                           {!v.vendorProfile?.isApproved ? (
                             <>
                               <button onClick={() => approveVendor.mutate({ id: v.id, approved: true })} disabled={approveVendor.isPending} className="rounded-full bg-success px-4 py-1.5 text-xs font-bold text-white hover:brightness-95 disabled:opacity-50">
@@ -955,32 +1127,92 @@ export default function AdminPage() {
           )}
 
           {/* ══════════ USERS ══════════ */}
-          {tab === "users" && (
+          {tab === "customers" && (
             <Card>
               <div className="mb-4 flex flex-col gap-2.5 lg:flex-row lg:items-center">
-                <div className="flex flex-wrap gap-1.5">
-                  {USER_ROLES.map((r) => (
-                    <button key={r} onClick={() => setUserRole(r)} className={`tab-pill !px-3.5 !py-1.5 !text-xs ${userRole === r ? "tab-pill-active" : "tab-pill-idle"}`}>{r}</button>
-                  ))}
+                <div>
+                  <p className="text-sm font-extrabold text-ink">Customers</p>
+                  <p className="text-xs font-medium text-muted">{users.length} registered customer{users.length === 1 ? "" : "s"} &bull; vendors and agents have their own menus</p>
                 </div>
                 <label className="relative ml-auto w-full lg:w-64">
                   <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
                   <input value={userSearch} onChange={(e) => setUserSearch(e.target.value)} placeholder="Search name, mobile, email…" className="input !pl-9 !py-2" />
                 </label>
+                <button
+                  onClick={() => syncRoleEmails.mutate({ role: "CUSTOMER" })}
+                  disabled={syncRoleEmails.isPending}
+                  className="btn-ghost !px-3.5 !py-2 !text-xs disabled:opacity-50"
+                >
+                  {syncRoleEmails.isPending ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+                  Sync with Patra
+                </button>
               </div>
               {usersQ.isLoading ? <ListSkeleton rows={6} /> : null}
               {users.length === 0 && !usersQ.isLoading ? (
-                <Empty title="No users found" hint="Adjust the role filter or search — every registration lands here." />
+                <Empty title="No customers found" hint="Try a different search - every customer registration lands here." />
               ) : (
                 users.map((u) => (
-                  <div key={u.id} className="row-line flex flex-wrap items-center justify-between gap-2 !py-3">
-                    <div>
-                      <p className="text-sm font-extrabold text-ink">{u.fullName} <span className="chip chip-neutral ml-1">{u.role}</span></p>
-                      <p className="mt-0.5 text-xs text-muted">{u.mobile} • {u.city} • {u.isActive ? "active" : <b className="text-danger">blocked</b>}{u.role === "CUSTOMER" ? ` • wallet ${inr(u.customerProfile?.walletBalance ?? 0)}` : ""}</p>
+                  <div key={u.id} className="row-line group -mx-2 flex flex-wrap items-center justify-between gap-2 rounded-2xl px-2 !py-3 transition-colors hover:bg-surface">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <AdminCustomerAvatar src={u.avatar} name={u.fullName} active={u.isActive} />
+                      <div className="min-w-0">
+                        <p className="flex flex-wrap items-center gap-1.5 text-sm font-extrabold text-ink">{u.fullName} <span className={ROLE_CHIP[u.role] ?? "chip chip-neutral"}>{u.role}</span>{!u.isActive ? <span className="chip chip-danger">blocked</span> : null}</p>
+                        <p className="mt-0.5 text-xs text-muted">{u.mobile} • {u.city}{u.role === "CUSTOMER" ? ` • wallet ${inr(u.customerProfile?.walletBalance ?? 0)}` : ""}</p>
+                        <p className="mt-1 flex flex-wrap gap-1">
+                          <span className={u.isVerified ? "chip chip-success" : "chip chip-neutral"}>{u.isVerified ? "Email verified" : "Email unverified"}</span>
+                          <span className={u.mobileVerified ? "chip chip-success" : "chip chip-neutral"}>{u.mobileVerified ? "Mobile verified" : "Mobile unverified"}</span>
+                        </p>
+                      </div>
                     </div>
-                    <button onClick={() => toggleUser.mutate({ id: u.id, isActive: !u.isActive })} disabled={toggleUser.isPending} className={u.isActive ? "btn-danger-ghost" : "btn-primary !px-3.5 !py-1.5 !text-xs"}>
-                      {u.isActive ? "Block" : "Unblock"}
-                    </button>
+                    <div className="flex items-center gap-1 rounded-full border border-line bg-white p-1 shadow-sm">
+                      {!u.isVerified && u.email ? (
+                        <>
+                          <button
+                            onClick={() => resendEmail.mutate({ id: u.id })}
+                            disabled={resendEmail.isPending && resendEmail.variables?.id === u.id}
+                            title="Resend verification e-mail"
+                            aria-label={`Resend verification e-mail to ${u.fullName}`}
+                            className="flex h-8 w-8 items-center justify-center rounded-full text-muted transition-colors hover:bg-primary-50 hover:text-primary-600 disabled:opacity-40"
+                          >
+                            {resendEmail.isPending && resendEmail.variables?.id === u.id ? <Loader2 size={15} className="animate-spin" /> : <Mail size={15} />}
+                          </button>
+                          <span className="h-5 w-px bg-line" />
+                          <button
+                            onClick={() => syncEmail.mutate({ id: u.id })}
+                            disabled={syncEmail.isPending && syncEmail.variables?.id === u.id}
+                            title="Sync with Patra"
+                            aria-label={`Sync ${u.fullName} with Patra`}
+                            className="flex h-8 w-8 items-center justify-center rounded-full text-muted transition-colors hover:bg-primary-50 hover:text-primary-600 disabled:opacity-40"
+                          >
+                            {syncEmail.isPending && syncEmail.variables?.id === u.id ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
+                          </button>
+                          <span className="h-5 w-px bg-line" />
+                        </>
+                      ) : null}
+                      <button
+                        onClick={() => toggleUser.mutate({ id: u.id, isActive: !u.isActive })}
+                        disabled={toggleUser.isPending || deleteUser.isPending}
+                        title={u.isActive ? "Block user" : "Unblock user"}
+                        aria-label={u.isActive ? `Block ${u.fullName}` : `Unblock ${u.fullName}`}
+                        className={`flex h-8 w-8 items-center justify-center rounded-full transition-colors disabled:opacity-40 ${u.isActive ? "text-muted hover:bg-accent-100 hover:text-accent-600" : "text-success hover:bg-success-soft"}`}
+                      >
+                        {toggleUser.isPending && toggleUser.variables?.id === u.id ? <Loader2 size={15} className="animate-spin" /> : u.isActive ? <Ban size={15} /> : <ShieldCheck size={15} />}
+                      </button>
+                      {u.mobile !== myMobile ? (
+                        <>
+                          <span className="h-5 w-px bg-line" />
+                          <button
+                            onClick={() => openDeleteUser(u)}
+                            disabled={deleteUser.isPending || toggleUser.isPending}
+                            title="Delete user permanently"
+                            aria-label={`Delete ${u.fullName}`}
+                            className="flex h-8 w-8 items-center justify-center rounded-full text-muted transition-colors hover:bg-danger-soft hover:text-danger disabled:opacity-40"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </>
+                      ) : null}
+                    </div>
                   </div>
                 ))
               )}
@@ -990,11 +1222,31 @@ export default function AdminPage() {
           {/* ══════════ AGENTS ══════════ */}
           {tab === "agents" && (
             <Card>
-              <p className="mb-1 font-extrabold text-ink">City agents & commission economics</p>
-              <p className="sub mb-4">Commission is earned on completed-booking GMV inside each agent&apos;s assigned city.</p>
+              <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="mb-1 font-extrabold text-ink">City agents & commission economics</p>
+                  <p className="sub">Commission is earned on completed-booking GMV inside each agent&apos;s assigned city.</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => { setAgentErr(""); setEditAgent(null); setAgentForm({ ...EMPTY_AGENT }); setAgentModal(true); }}
+                    className="btn-primary !px-4 !py-2 !text-[13px]"
+                  >
+                    <Plus size={15} /> Register agent
+                  </button>
+                  <button
+                    onClick={() => syncRoleEmails.mutate({ role: "AGENT" })}
+                    disabled={syncRoleEmails.isPending}
+                    className="btn-ghost !px-3.5 !py-2 !text-xs disabled:opacity-50"
+                  >
+                    {syncRoleEmails.isPending ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+                    Sync with Patra
+                  </button>
+                </div>
+              </div>
               {agentsQ.isLoading ? <ListSkeleton rows={4} /> : null}
               {agents.length === 0 && !agentsQ.isLoading ? (
-                <Empty title="No agents yet" hint="Agents register via Join as Agent and get a city territory assigned." />
+                <Empty title="No agents yet" hint="Use Register agent to provision a city agent — self-signup for agents is disabled." />
               ) : (
                 <div className="space-y-2.5">
                   {agents.map((a) => (
@@ -1002,18 +1254,51 @@ export default function AdminPage() {
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <div>
                           <p className="flex flex-wrap items-center gap-2 font-extrabold text-ink">{a.fullName} <span className="chip chip-primary">{a.city}</span>
+                            <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-extrabold ring-1 ${a.mobileVerified ? "bg-success-soft text-success ring-success/20" : "bg-surface text-muted ring-line"}`}>
+                              {a.mobileVerified ? "Mobile verified" : "Mobile unverified"}
+                            </span>
                             {/* email-verification status, driven by isVerified */}
                             <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-extrabold ring-1 ${a.isVerified ? "bg-primary-50 text-primary-700 ring-primary-200" : "bg-accent-100 text-accent-600 ring-accent-200"}`}>
                               {a.isVerified ? "✓ Email verified" : "! Email unverified"}
                             </span>
                           </p>
-                          <p className="mt-0.5 text-xs text-muted">{a.mobile} • {a.cityBookings} city bookings • {inr(a.cityGmv)} city GMV</p>
+                          <p className="mt-0.5 text-xs text-muted">{a.mobile} • {a.pincodes?.length ?? 0} pincodes • {a.cityBookings} city bookings • {inr(a.cityGmv)} city GMV</p>
                         </div>
                         <div className="flex items-center gap-3">
                           <p className="text-right">
                             <span className="block text-lg font-extrabold text-success">{inr(a.commissionEarned)}</span>
                             <span className="block text-[11px] font-bold text-muted">earned @ {a.commissionPercent}%</span>
                           </p>
+                          {!a.isVerified && a.email ? (
+                            <>
+                              <button
+                                onClick={() => resendEmail.mutate({ id: a.id })}
+                                disabled={resendEmail.isPending && resendEmail.variables?.id === a.id}
+                                className="btn-ghost !px-3 !py-1.5 !text-[11px] disabled:opacity-50"
+                              >
+                                {resendEmail.isPending && resendEmail.variables?.id === a.id ? <Loader2 size={13} className="animate-spin" /> : <Mail size={13} />} Resend
+                              </button>
+                              <button
+                                onClick={() => syncEmail.mutate({ id: a.id })}
+                                disabled={syncEmail.isPending && syncEmail.variables?.id === a.id}
+                                className="btn-ghost !px-3 !py-1.5 !text-[11px] disabled:opacity-50"
+                              >
+                                {syncEmail.isPending && syncEmail.variables?.id === a.id ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />} Sync
+                              </button>
+                            </>
+                          ) : null}
+                          <button
+                            onClick={() => {
+                              const ar = areas.find((x) => x.city.toLowerCase() === a.city.toLowerCase());
+                              setAgentErr("");
+                              setEditAgent(a);
+                              setAgentForm({ ...EMPTY_AGENT, fullName: a.fullName, mobile: a.mobile, areaId: ar?.id ?? "", pincodes: a.pincodes ?? [] });
+                              setAgentModal(true);
+                            }}
+                            className="btn-ghost !px-3 !py-1.5 !text-[11px]"
+                          >
+                            <MapPin size={13} /> Area
+                          </button>
                           <NumberSaver value={a.commissionPercent} suffix="%" saving={updateComm.isPending} onSave={(v) => updateComm.mutate({ id: a.id, commissionPercent: Math.min(50, Math.max(0, Math.round(v))) })} />
                         </div>
                       </div>
@@ -1398,7 +1683,6 @@ export default function AdminPage() {
                     <p className="mb-2 text-[10px] font-extrabold uppercase tracking-widest text-muted">Push preview</p>
                     <div className="overflow-hidden rounded-xl border border-line bg-white">
                       {bImage.trim() !== "" ? (
-                        // eslint-disable-next-line @next/next/no-img-element
                         <img src={bImage.trim()} alt="" className="h-28 w-full object-cover" />
                       ) : null}
                       <div className="flex items-start gap-2.5 p-3">
@@ -1450,7 +1734,6 @@ export default function AdminPage() {
                       <p className="text-sm font-extrabold text-ink">{n.title} <span className="chip chip-neutral ml-1">{n.type}</span></p>
                       <p className="mt-0.5 text-[13px] text-body">{n.message}</p>
                       {n.image ? (
-                        // eslint-disable-next-line @next/next/no-img-element
                         <img src={n.image} alt="" className="mt-2 h-20 w-full max-w-[240px] rounded-xl object-cover" />
                       ) : null}
                     </div>
@@ -1462,7 +1745,169 @@ export default function AdminPage() {
         </main>
       </div>
 
+      {/* ── delete-user confirm ── */}
+      {deleteTarget ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-ink/60 p-4 backdrop-blur-sm"
+          onClick={() => { if (!deleteUser.isPending) setDeleteTarget(null); }}
+        >
+          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-pop" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start gap-4">
+              <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-danger-soft">
+                <UserX size={22} className="text-danger" />
+              </span>
+              <div className="min-w-0">
+                <p className="text-lg font-extrabold tracking-tight text-ink">Delete this user?</p>
+                <p className="mt-1 truncate text-sm font-semibold text-body">
+                  {deleteTarget.fullName} <span className="text-muted">·</span> {deleteTarget.mobile}
+                </p>
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                  <span className={ROLE_CHIP[deleteTarget.role] ?? "chip chip-neutral"}>{deleteTarget.role}</span>
+                  <span className="chip chip-neutral">{deleteTarget.city}</span>
+                </div>
+              </div>
+            </div>
+            <div className="mt-4 flex gap-2.5 rounded-2xl border border-danger/20 bg-danger-soft p-3 text-xs font-semibold leading-relaxed text-danger">
+              <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+              <span>
+                Permanently deletes this account and everything linked to it — bookings, reviews, leads, wallet history, notifications and addresses. Use only to clean up test data.
+              </span>
+            </div>
+            {deleteError ? (
+              <p className="mt-3 flex items-start gap-2 rounded-xl border border-danger/20 bg-danger-soft px-3 py-2 text-xs font-bold text-danger">
+                <AlertCircle size={14} className="mt-0.5 shrink-0" /> {deleteError}
+              </p>
+            ) : null}
+            <div className="mt-5 grid grid-cols-2 gap-2.5">
+              <button
+                onClick={() => setDeleteTarget(null)}
+                disabled={deleteUser.isPending}
+                className="btn-ghost !py-3 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => deleteUser.mutate({ id: deleteTarget.id })}
+                disabled={deleteUser.isPending}
+                className="btn-primary !bg-danger !py-3 disabled:opacity-50"
+              >
+                {deleteUser.isPending ? <><Loader2 size={16} className="animate-spin" /> Deleting…</> : <><Trash2 size={16} /> Delete user</>}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {/* ── logout confirm / signed-out overlays ── */}
+      {/* ── register agent (superadmin only) ── */}
+      {agentModal ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-ink/60 p-4 backdrop-blur-sm"
+          onClick={() => { if (!createAgent.isPending) setAgentModal(false); }}
+        >
+          <div className="my-6 max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-white p-6 shadow-pop" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-primary-50">
+                  <UserCheck size={22} className="text-primary-600" />
+                </span>
+                <div className="min-w-0">
+                  <p className="text-lg font-extrabold tracking-tight text-ink">{editAgent ? "Edit agent territory" : "Register a city agent"}</p>
+                  <p className="mt-0.5 text-xs font-medium text-muted">
+                    {editAgent
+                      ? `Assign the city and pincodes ${editAgent.fullName} monitors.`
+                      : "Agents are provisioned by the superadmin. They sign in with Google using this email."}
+                  </p>
+                </div>
+              </div>
+              <button onClick={() => setAgentModal(false)} aria-label="Close" className="rounded-full p-2 text-muted hover:bg-surface hover:text-ink"><X size={17} /></button>
+            </div>
+
+            {editAgent ? (
+              <div className="mt-4 flex flex-wrap items-center gap-2 rounded-xl border border-line bg-surface px-3 py-2.5 text-xs font-semibold text-body">
+                <UserCheck size={14} className="text-primary-600" />
+                <b className="text-ink">{editAgent.fullName}</b>
+                <span className="text-muted">• {editAgent.mobile}</span>
+                <span className="chip chip-primary ml-auto">{editAgent.city}</span>
+              </div>
+            ) : (
+              <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-[12px] font-extrabold text-ink">Full name</label>
+                  <input value={agentForm.fullName} onChange={(e) => setAgentForm((f) => ({ ...f, fullName: e.target.value }))} placeholder="e.g. Rahul Verma" className="input !py-2.5" />
+                </div>
+                <div>
+                  <label className="mb-1 block text-[12px] font-extrabold text-ink">Mobile</label>
+                  <input inputMode="numeric" value={agentForm.mobile} onChange={(e) => setAgentForm((f) => ({ ...f, mobile: e.target.value.replace(/\D/g, "").slice(0, 10) }))} placeholder="10-digit mobile" className="input !py-2.5" />
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="mb-1 block text-[12px] font-extrabold text-ink">Email (for Google sign-in)</label>
+                  <input type="email" value={agentForm.email} onChange={(e) => setAgentForm((f) => ({ ...f, email: e.target.value }))} placeholder="agent@email.com" className="input !py-2.5" />
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="mb-1 block text-[12px] font-extrabold text-ink">Office address</label>
+                  <input value={agentForm.officeAddress} onChange={(e) => setAgentForm((f) => ({ ...f, officeAddress: e.target.value }))} placeholder="e.g. MG Road, Lucknow" className="input !py-2.5" />
+                </div>
+                <div>
+                  <label className="mb-1 block text-[12px] font-extrabold text-ink">Commission %</label>
+                  <input inputMode="decimal" value={agentForm.commissionPercent} onChange={(e) => setAgentForm((f) => ({ ...f, commissionPercent: e.target.value }))} className="input !py-2.5" />
+                </div>
+              </div>
+            )}
+
+            <div className="mt-3">
+              <AgentTerritoryPicker
+                areas={areas.map((a) => ({ id: a.id, city: a.city, state: a.state, lat: a.lat, lng: a.lng, pincodes: a.pincodes }))}
+                areaId={agentForm.areaId}
+                onAreaChange={(id) => {
+                  const ar = areas.find((x) => x.id === id);
+                  setAgentForm((f) => ({ ...f, areaId: id, pincodes: ar ? [...ar.pincodes] : [] }));
+                }}
+                pincodes={agentForm.pincodes}
+                onPincodesChange={(next) => setAgentForm((f) => ({ ...f, pincodes: next }))}
+              />
+            </div>
+
+            {agentErr ? (
+              <p className="mt-3 flex items-start gap-2 rounded-xl border border-danger/20 bg-danger-soft px-3 py-2 text-xs font-bold text-danger">
+                <AlertCircle size={14} className="mt-0.5 shrink-0" /> {agentErr}
+              </p>
+            ) : null}
+
+            <div className="mt-5 grid grid-cols-2 gap-2.5">
+              <button onClick={() => setAgentModal(false)} disabled={createAgent.isPending || updateAgentArea.isPending} className="btn-ghost !py-3 disabled:opacity-50">Cancel</button>
+              <button
+                onClick={() => {
+                  setAgentErr("");
+                  if (editAgent) {
+                    updateAgentArea.mutate({ id: editAgent.id, areaId: agentForm.areaId, pincodes: agentForm.pincodes });
+                  } else {
+                    createAgent.mutate({
+                      fullName: agentForm.fullName.trim(),
+                      mobile: agentForm.mobile.trim(),
+                      email: agentForm.email.trim(),
+                      areaId: agentForm.areaId,
+                      pincodes: agentForm.pincodes,
+                      officeAddress: agentForm.officeAddress.trim(),
+                      commissionPercent: Math.min(50, Math.max(0, Number(agentForm.commissionPercent) || 5)),
+                    });
+                  }
+                }}
+                disabled={
+                  createAgent.isPending || updateAgentArea.isPending || agentForm.areaId === "" || agentForm.pincodes.length === 0 ||
+                  (!editAgent && (agentForm.fullName.trim().length < 2 || !/^[6-9]\d{9}$/.test(agentForm.mobile) || !agentForm.email.includes("@") || agentForm.officeAddress.trim().length < 2))
+                }
+                className="btn-primary !py-3 disabled:opacity-50"
+              >
+                {createAgent.isPending || updateAgentArea.isPending
+                  ? <><Loader2 size={16} className="animate-spin" /> {editAgent ? "Saving…" : "Creating…"}</>
+                  : <><Plus size={16} /> {editAgent ? "Save territory" : "Create agent"}</>}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {loggingOut === "confirm" ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/60 p-4 backdrop-blur-sm">
           <div className="w-full max-w-sm rounded-3xl bg-white p-6 text-center shadow-pop">

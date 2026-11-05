@@ -199,6 +199,62 @@ export const usersRouter = createTRPCRouter({
       return ctx.db.user.update({ where: { id: input.id }, data: { isActive: input.isActive } });
     }),
 
+  /**
+   * Permanently deletes a user and everything linked to it (bookings + their
+   * timeline/leads/reviews, wallet history, notifications, addresses,
+   * profiles). Intended for cleaning up test data — production accounts with
+   * history should be blocked instead.
+   */
+  deleteUser: adminProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      if (!isObjectId(input.id)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid user id." });
+      }
+
+      const sessionUser = ctx.session.user as { id: string; mobile?: string };
+      const selfId = await resolveDbUserId(ctx.db, sessionUser);
+      if (selfId === input.id) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "You cannot delete your own admin account." });
+      }
+
+      const user = await ctx.db.user.findUnique({
+        where: { id: input.id },
+        select: { id: true, fullName: true, mobile: true },
+      });
+      if (!user) throw new TRPCError({ code: "NOT_FOUND", message: "User not found." });
+
+      // The env-root superadmin's DB row backs device tokens — never delete it.
+      const envMobile = (process.env.SUPERADMIN_MOBILE ?? "").trim();
+      if (envMobile !== "" && user.mobile === envMobile) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "The bootstrap superadmin account cannot be deleted." });
+      }
+
+      // Cascade: gather every booking this user is part of, then remove all
+      // dependent records before the account itself.
+      const bookings = await ctx.db.booking.findMany({
+        where: { OR: [{ customerId: input.id }, { vendorId: input.id }] },
+        select: { id: true },
+      });
+      const bookingIds = bookings.map((b) => b.id);
+
+      await ctx.db.$transaction([
+        ctx.db.bookingEvent.deleteMany({ where: { bookingId: { in: bookingIds } } }),
+        ctx.db.review.deleteMany({ where: { OR: [{ bookingId: { in: bookingIds } }, { customerId: input.id }, { vendorId: input.id }] } }),
+        ctx.db.lead.deleteMany({ where: { OR: [{ bookingId: { in: bookingIds } }, { vendorId: input.id }] } }),
+        ctx.db.booking.deleteMany({ where: { id: { in: bookingIds } } }),
+        ctx.db.walletTransaction.deleteMany({ where: { userId: input.id } }),
+        ctx.db.notification.deleteMany({ where: { userId: input.id } }),
+        ctx.db.address.deleteMany({ where: { userId: input.id } }),
+        ctx.db.customerProfile.deleteMany({ where: { userId: input.id } }),
+        ctx.db.vendorProfile.deleteMany({ where: { userId: input.id } }),
+        ctx.db.agentProfile.deleteMany({ where: { userId: input.id } }),
+        ctx.db.user.delete({ where: { id: input.id } }),
+      ]);
+
+      return { ok: true, id: input.id, removedBookings: bookingIds.length };
+    }),
+
   stats: adminProcedure.query(async ({ ctx }) => {
     const [customers, vendors, agents, admins] = await Promise.all([
       ctx.db.user.count({ where: { role: "CUSTOMER" } }),

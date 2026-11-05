@@ -3,18 +3,23 @@
 import { useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import {
   LayoutDashboard, CalendarClock, Wallet, Bell, BellOff, LogOut, ChevronRight, X, Check,
   Star, TrendingUp, CheckCircle2, Plus, ArrowRight, Sparkles, CheckCheck,
-  CalendarCheck, CreditCard, Gift, Info, Phone, Loader2, XCircle, RotateCcw, AlertTriangle,
+  CalendarCheck, CreditCard, Gift, Info, Phone, Loader2, XCircle, RotateCcw, AlertTriangle, History,
 } from "lucide-react";
 import { trpc } from "~/trpc/react";
 import BrandedLoader from "~/app/components/common/BrandedLoader";
 import MobileVerifyCard from "~/app/components/common/MobileVerifyCard";
+import { BookingTimeline } from "~/app/components/booking/BookingTimeline";
 
 type Tab = "overview" | "bookings" | "notifications";
+
+// Mobile (SMS/Firebase) verification is on hold. E-mail confirmation is the
+// current gate; flip this flag when SMS verification is re-enabled.
+const MOBILE_VERIFICATION_ENABLED = process.env.NEXT_PUBLIC_ENABLE_MOBILE_VERIFICATION === "1";
 
 const STATUS_STYLE: Record<string, string> = {
   PENDING: "chip chip-accent",
@@ -86,14 +91,50 @@ function dayBucket(d: string | Date): DayBucket {
 
 interface BookingRow {
   id: string; status: string; paymentStatus: string; description: string; totalAmount: number;
-  preferredDate?: string; paymentMethod?: string;
+  preferredDate?: string; paymentMethod?: string; pincode?: string | null;
   timeSlot?: { label?: string } | null;
   address?: { area?: string; city?: string; pincode?: string; houseNo?: string } | null;
   vendor?: { fullName: string; mobile?: string; vendorProfile?: { businessName?: string; avgRating?: number } | null } | null;
+  agent?: { fullName: string; mobile?: string } | null;
+  events?: { id: string; status: string; action?: string | null; actorRole: string; note?: string | null; createdAt: string | Date }[];
   Review?: { rating?: number }[];
 }
 interface Cat {
   id: string; slug: string; name: string; icon: string;
+}
+
+/**
+ * Customer avatar with a safe fallback.
+ *
+ * Remote avatars (Google profile photos) are served through Next's image
+ * optimizer, so the browser never has to load `lh3.googleusercontent.com`
+ * directly — that URL is often blocked by privacy extensions / ad blockers.
+ * If the image still fails, we fall back to initials.
+ */
+function CustomerAvatar({ src, name, size = 40, className = "" }: { src: string; name: string; size?: number; className?: string }) {
+  const [failed, setFailed] = useState(false);
+  const initials = (name || "?").split(/\s+/).filter(Boolean).map((p) => p[0]).slice(0, 2).join("").toUpperCase() || "?";
+  const box = size >= 40 ? "h-10 w-10" : "h-8 w-8";
+
+  if (!src || failed) {
+    return (
+      <span className={`${box} flex shrink-0 items-center justify-center rounded-full bg-primary-50 text-xs font-extrabold text-primary-700 ring-1 ring-primary-100 ${className}`}>
+        {initials}
+      </span>
+    );
+  }
+
+  return (
+    <Image
+      src={src}
+      alt={name}
+      width={size}
+      height={size}
+      referrerPolicy="no-referrer"
+      onError={() => setFailed(true)}
+      className={`${box} shrink-0 rounded-full object-cover ring-2 ring-primary-100 ${className}`}
+    />
+  );
 }
 
 export default function CustomerDashboard() {
@@ -109,9 +150,16 @@ export default function CustomerDashboard() {
     if (status === "authenticated" && role === "ADMIN") router.replace("/admin");
   }, [status, role, router]);
 
-  const [tab, setTab] = useState<Tab>("overview");
+  // Route-driven tabs: /customer/dashboard, …/bookings, …/notifications.
+  const params = useParams();
+  const rawSection = params?.section;
+  const sectionParam = Array.isArray(rawSection) ? rawSection[0] : rawSection;
+  const TAB_KEYS: Tab[] = ["overview", "bookings", "notifications"];
+  const tab: Tab = sectionParam && TAB_KEYS.includes(sectionParam as Tab) ? (sectionParam as Tab) : "overview";
+  const goTab = (t: Tab) => router.push(t === "overview" ? "/customer/dashboard" : `/customer/dashboard/${t}`);
   const [loggingOut, setLoggingOut] = useState<"confirm" | "signedout" | null>(null);
   const [notifOpen, setNotifOpen] = useState(false);
+  const [openHistory, setOpenHistory] = useState<string | null>(null);
   const [notifTab, setNotifTab] = useState<"all" | "unread">("all");
   const [pushPerm, setPushPerm] = useState<NotificationPermission | "unsupported">("default");
 
@@ -134,7 +182,8 @@ export default function CustomerDashboard() {
   const notifQ = trpc.admin.notifications.useQuery({ limit: 10 }, { enabled: !!customerId && status === "authenticated" });
   const markRead = trpc.admin.markNotificationRead.useMutation({ onSuccess: () => notifQ.refetch() });
 
-  const me = meQ.data as { fullName?: string; mobile?: string; city?: string; mobileVerified?: boolean; customerProfile?: { walletBalance: number; referralCode?: string | null } | null } | undefined;
+  const me = meQ.data as { fullName?: string; mobile?: string; city?: string; mobileVerified?: boolean; avatar?: string | null; customerProfile?: { walletBalance: number; referralCode?: string | null } | null } | undefined;
+  const avatarUrl = me?.avatar ?? ((sUser as { image?: string } | undefined)?.image ?? "");
   const bookings = useMemo(() => ((bookingsQ.data as BookingRow[] | undefined) ?? []), [bookingsQ.data]);
   const cats = (catsQ.data as Cat[] | undefined) ?? [];
   const notifications = useMemo(() => ((notifQ.data as NotifRow[] | undefined) ?? []), [notifQ.data]);
@@ -225,12 +274,12 @@ export default function CustomerDashboard() {
         </div>
         <nav className="flex-1 space-y-1 overflow-y-auto px-3">
           {NAV.map(({ key, label, Icon, badge }) => (
-            <button key={key} onClick={() => setTab(key)} className={`flex w-full items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm font-bold transition-all ${tab === key ? "bg-white text-ink shadow-sm" : "text-slate-300 hover:bg-white/10 hover:text-white"}`}>
+            <Link key={key} href={key === "overview" ? "/customer/dashboard" : `/customer/dashboard/${key}`} className={`flex w-full items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm font-bold transition-all ${tab === key ? "bg-white text-ink shadow-sm" : "text-slate-300 hover:bg-white/10 hover:text-white"}`}>
               <Icon size={17} className={tab === key ? "text-primary-600" : ""} />
               <span className="flex-1 text-left">{label}</span>
               {badge !== undefined && badge > 0 ? <span className="rounded-full bg-accent-400 px-2 py-0.5 text-[11px] font-extrabold text-accent-ink">{badge}</span> : null}
               {tab === key ? <ChevronRight size={14} className="text-muted" /> : null}
-            </button>
+            </Link>
           ))}
           <div className="px-3.5 pt-4">
             <Link href="/customer/booking" className="flex items-center justify-center gap-2 rounded-xl bg-accent-400 py-2.5 text-sm font-extrabold text-accent-ink transition-colors hover:bg-accent-300">
@@ -251,9 +300,12 @@ export default function CustomerDashboard() {
       <div className="min-w-0 flex-1">
         {/* desktop header */}
         <header className="sticky top-0 z-30 hidden items-center justify-between border-b border-line bg-white/95 px-6 py-3 backdrop-blur lg:flex">
-          <div>
-            <h1 className="text-lg font-extrabold tracking-tight text-ink">Namaste, {me?.fullName?.split(" ")[0] ?? "there"} 👋</h1>
-            <p className="text-xs font-medium text-muted">{me?.mobile ?? ""} • {new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long" })}</p>
+          <div className="flex items-center gap-3">
+            <CustomerAvatar src={avatarUrl} name={me?.fullName ?? ""} size={40} />
+            <div>
+              <h1 className="text-lg font-extrabold tracking-tight text-ink">Namaste, {me?.fullName?.split(" ")[0] ?? "there"} 👋</h1>
+              <p className="text-xs font-medium text-muted">{me?.mobile ?? ""} • {new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long" })}</p>
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <Link href="/customer/booking" className="btn-primary !py-2 !text-[13px]"><Plus size={15} /> Book service</Link>
@@ -273,7 +325,8 @@ export default function CustomerDashboard() {
           <div className="flex h-14 items-center gap-2 px-3">
             <Image src="/logo.png" alt="ADDies" width={30} height={30} className="h-8 w-8 object-contain" />
             <p className="truncate text-sm font-extrabold text-ink">Namaste, {me?.fullName?.split(" ")[0] ?? "there"}</p>
-            <button onClick={() => setNotifOpen((o) => !o)} className="relative ml-auto rounded-full p-2 text-muted hover:bg-surface hover:text-ink">
+            <CustomerAvatar src={avatarUrl} name={me?.fullName ?? ""} size={32} className="ml-auto" />
+            <button onClick={() => setNotifOpen((o) => !o)} className="relative rounded-full p-2 text-muted hover:bg-surface hover:text-ink">
               <Bell size={18} />
               {unreadCount > 0 ? (
                 <span className="absolute right-1 top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-danger text-[8px] font-extrabold text-white">{unreadCount}</span>
@@ -285,9 +338,9 @@ export default function CustomerDashboard() {
           </div>
           <nav className="no-scrollbar flex gap-1.5 overflow-x-auto px-3 pb-2.5">
             {NAV.map(({ key, label, badge }) => (
-              <button key={key} onClick={() => setTab(key)} className={`tab-pill shrink-0 !text-[13px] ${tab === key ? "tab-pill-active" : "tab-pill-idle"}`}>
+              <Link key={key} href={key === "overview" ? "/customer/dashboard" : `/customer/dashboard/${key}`} className={`tab-pill shrink-0 !text-[13px] ${tab === key ? "tab-pill-active" : "tab-pill-idle"}`}>
                 {label}{badge !== undefined && badge > 0 ? ` (${badge})` : ""}
-              </button>
+              </Link>
             ))}
           </nav>
         </header>
@@ -328,8 +381,8 @@ export default function CustomerDashboard() {
                 ))}
               </div>
 
-              {/* mobile verification (Firebase Phone Auth OTP) */}
-              {me?.mobile ? (
+              {/* mobile verification (Firebase Phone Auth OTP) — on hold */}
+              {MOBILE_VERIFICATION_ENABLED && me?.mobile ? (
                 <MobileVerifyCard mobile={me.mobile} verified={Boolean(me.mobileVerified)} onVerified={() => { void meQ.refetch(); }} />
               ) : null}
 
@@ -354,7 +407,7 @@ export default function CustomerDashboard() {
               <div className="card">
                 <div className="mb-2 flex items-center justify-between">
                   <p className="font-extrabold text-ink">Recent bookings</p>
-                  <button onClick={() => setTab("bookings")} className="text-[13px] font-bold text-primary-600">View all →</button>
+                  <button onClick={() => goTab("bookings")} className="text-[13px] font-bold text-primary-600">View all →</button>
                 </div>
                 {bookings.length === 0 ? (
                   <div className="flex flex-col items-center gap-2 py-8 text-center">
@@ -461,6 +514,29 @@ export default function CustomerDashboard() {
                             <XCircle size={14} /> {b.status === "DISPUTED" ? "Under dispute — our team will reach out shortly." : "This booking was cancelled."}
                           </div>
                         )}
+
+                        {b.agent ? (
+                          <p className="mt-2 text-[11px] font-semibold text-muted">
+                            Area agent: <b className="text-body">{b.agent.fullName}</b>
+                            {b.agent.mobile ? ` · ${b.agent.mobile}` : ""}
+                          </p>
+                        ) : null}
+
+                        <div className="mt-3">
+                          <button
+                            type="button"
+                            onClick={() => setOpenHistory(openHistory === b.id ? null : b.id)}
+                            className="inline-flex items-center gap-1.5 rounded-full border border-line bg-white px-3 py-1.5 text-[11px] font-bold text-body transition-colors hover:border-primary-200 hover:text-primary-700"
+                          >
+                            <History size={13} />
+                            {openHistory === b.id ? "Hide history" : `Tracking history (${b.events?.length ?? 0})`}
+                          </button>
+                          {openHistory === b.id ? (
+                            <div className="mt-2 rounded-xl border border-line bg-surface p-3">
+                              <BookingTimeline events={b.events ?? []} />
+                            </div>
+                          ) : null}
+                        </div>
 
                         <div className="mt-3 flex flex-wrap items-center gap-2">
                           {b.status === "COMPLETED" || b.status === "CANCELLED" ? (

@@ -33,24 +33,30 @@ export const authConfig = {
       credentials: {
         mobile: { label: "Mobile", type: "text" },
         password: { label: "Password", type: "password" },
+        scope: { label: "Scope", type: "text" },
       },
       async authorize(credentials: Record<string, unknown> | undefined) {
         const identifier = ((credentials?.mobile as string) ?? "").trim();
         const password = credentials?.password as string | undefined;
         if (!identifier || !password) return null;
 
-        // ── Env superadmin: DB-independent bootstrap login (checked first) ──
-        // Mobile + base64(bcrypt hash) live only in `.env` (gitignored), never in code/DB.
-        // Base64 because a raw bcrypt hash contains `$`, which Next.js .env
-        // expansion would silently swallow.
-        const envMobile = (process.env.SUPERADMIN_MOBILE ?? "").trim();
-        let envHash = "";
-        try {
-          envHash = Buffer.from(process.env.SUPERADMIN_PASSWORD_HASH_B64 ?? "", "base64").toString("utf8");
-        } catch {
-          envHash = "";
-        }
-        if (envMobile !== "" && /^\$2[aby]\$/.test(envHash) && identifier === envMobile) {
+        // The dedicated /auth/superadmin page sends scope="superadmin". Only
+        // the env-root credential can sign in there; the normal /auth/login
+        // page never reaches this branch, so the two doors stay separate.
+        const scope = ((credentials?.scope as string) ?? "").trim().toLowerCase();
+        if (scope === "superadmin") {
+          // ── Env superadmin: DB-independent bootstrap login ──
+          // Mobile + base64(bcrypt hash) live only in `.env` (gitignored), never in code/DB.
+          // Base64 because a raw bcrypt hash contains `$`, which Next.js .env
+          // expansion would silently swallow.
+          const envMobile = (process.env.SUPERADMIN_MOBILE ?? "").trim();
+          let envHash = "";
+          try {
+            envHash = Buffer.from(process.env.SUPERADMIN_PASSWORD_HASH_B64 ?? "", "base64").toString("utf8");
+          } catch {
+            envHash = "";
+          }
+          if (envMobile === "" || !/^\$2[aby]\$/.test(envHash) || identifier !== envMobile) return null;
           const valid = await compare(password, envHash);
           if (!valid) return null;
           return {
@@ -62,6 +68,9 @@ export const authConfig = {
             city: "Lucknow",
           } as unknown as { id: string; name: string };
         }
+
+        // Normal login: DB accounts only. The env-root account deliberately
+        // has no DB password, so it can never sign in from here.
 
         // Mobile first (globally unique login key), then email — email may
         // exist on several role accounts, so an email match picks any one of
@@ -97,6 +106,7 @@ export const authConfig = {
           role: user.role,
           city: user.city,
           mobileVerified: user.mobileVerified,
+          avatar: user.avatar,
         } as unknown as { id: string; name: string };
       },
     }),
@@ -133,16 +143,21 @@ export const authConfig = {
           const dbUser =
             (await db.user.findFirst({
               where: { email },
-              select: { id: true, fullName: true, mobile: true, role: true, city: true, mobileVerified: true, isVerified: true },
+              select: { id: true, fullName: true, mobile: true, role: true, city: true, mobileVerified: true, isVerified: true, avatar: true },
             })) ??
             (await db.user.findFirst({
               where: { email: email.toLowerCase() },
-              select: { id: true, fullName: true, mobile: true, role: true, city: true, mobileVerified: true, isVerified: true },
+              select: { id: true, fullName: true, mobile: true, role: true, city: true, mobileVerified: true, isVerified: true, avatar: true },
             }));
           if (dbUser) {
             if (!dbUser.isVerified) {
               // Google proved ownership of the email — clear the email gate.
               await db.user.update({ where: { id: dbUser.id }, data: { isVerified: true } });
+            }
+            // Persist the Google profile picture so every console can show it.
+            const googleAvatar = (user.image as string | undefined) ?? null;
+            if (googleAvatar && dbUser.avatar !== googleAvatar) {
+              await db.user.update({ where: { id: dbUser.id }, data: { avatar: googleAvatar } });
             }
             token.id = dbUser.id;
             token.mobile = dbUser.mobile;
@@ -150,7 +165,8 @@ export const authConfig = {
             token.city = dbUser.city;
             token.mobileVerified = dbUser.mobileVerified;
             token.name = dbUser.fullName;
-            token.picture = user.image ?? token.picture;
+            token.avatar = googleAvatar ?? dbUser.avatar ?? null;
+            token.picture = googleAvatar ?? token.picture;
             return token;
           }
         }
@@ -159,6 +175,7 @@ export const authConfig = {
         token.role = user.role;
         token.city = user.city;
         token.mobileVerified = (user as { mobileVerified?: boolean }).mobileVerified ?? false;
+        token.avatar = (user as { avatar?: string | null }).avatar ?? token.avatar ?? null;
         token.name = user.name ?? token.name;
       }
       return token;
@@ -171,6 +188,9 @@ export const authConfig = {
         session.user.role = token.role as string;
         session.user.city = token.city as string;
         session.user.mobileVerified = Boolean(token.mobileVerified);
+        session.user.avatar = (token.avatar as string | null | undefined) ?? (token.picture as string | null | undefined) ?? null;
+        // Keep NextAuth's own image field in sync for components that use it.
+        session.user.image = (token.picture as string | undefined) ?? (token.avatar as string | undefined) ?? null;
       }
       return session;
     },
