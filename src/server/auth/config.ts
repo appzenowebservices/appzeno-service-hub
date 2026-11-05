@@ -1,4 +1,5 @@
 import CredentialsProvider from "next-auth/providers/credentials";
+import Google from "next-auth/providers/google";
 import { compare } from "bcryptjs";
 import { db } from "~/server/db";
 
@@ -23,6 +24,10 @@ export const authConfig = {
     signIn: "/auth/login",
   },
   providers: [
+    Google({
+      clientId: process.env.AUTH_GOOGLE_ID ?? "",
+      clientSecret: process.env.AUTH_GOOGLE_SECRET ?? "",
+    }),
     CredentialsProvider({
       name: "Credentials",
       credentials: {
@@ -101,9 +106,54 @@ export const authConfig = {
     maxAge: 7 * 24 * 60 * 60,
   },
   callbacks: {
+    /**
+     * Google sign-in is only allowed for emails that already have an ADDies
+     * account (mobile is our primary identity). Unknown emails are sent to
+     * registration instead of silently creating an account.
+     */
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async jwt({ token, user }: any) {
+    async signIn({ user, account }: any) {
+      if (account?.provider !== "google") return true;
+      const email = (user?.email ?? "").trim();
+      if (!email) return false;
+      const existing =
+        (await db.user.findFirst({ where: { email }, select: { id: true, isActive: true } })) ??
+        (await db.user.findFirst({ where: { email: email.toLowerCase() }, select: { id: true, isActive: true } }));
+      if (!existing) return `/auth/register?google=1&email=${encodeURIComponent(email)}`;
+      return existing.isActive;
+    },
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    async jwt({ token, user, account }: any) {
       if (user) {
+        // Google returns its own profile — map it onto our DB user so the
+        // session carries the same id/role/mobile as password logins.
+        if (account?.provider === "google") {
+          const email = (user.email ?? "").trim();
+          const dbUser =
+            (await db.user.findFirst({
+              where: { email },
+              select: { id: true, fullName: true, mobile: true, role: true, city: true, mobileVerified: true, isVerified: true },
+            })) ??
+            (await db.user.findFirst({
+              where: { email: email.toLowerCase() },
+              select: { id: true, fullName: true, mobile: true, role: true, city: true, mobileVerified: true, isVerified: true },
+            }));
+          if (dbUser) {
+            if (!dbUser.isVerified) {
+              // Google proved ownership of the email — clear the email gate.
+              await db.user.update({ where: { id: dbUser.id }, data: { isVerified: true } });
+            }
+            token.id = dbUser.id;
+            token.mobile = dbUser.mobile;
+            token.role = dbUser.role;
+            token.city = dbUser.city;
+            token.mobileVerified = dbUser.mobileVerified;
+            token.name = dbUser.fullName;
+            token.picture = user.image ?? token.picture;
+            return token;
+          }
+        }
         token.id = user.id ?? token.sub;
         token.mobile = user.mobile;
         token.role = user.role;

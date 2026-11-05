@@ -4,9 +4,8 @@ import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { signIn } from "next-auth/react";
 import {
-  Eye, EyeOff, UserRound, Briefcase, Building2, Loader2, AlertCircle,
+  UserRound, Briefcase, Building2, Loader2, AlertCircle,
   BadgeCheck, Wallet, ShieldCheck, Banknote, CheckCircle2, ArrowRight, MapPin,
 } from "lucide-react";
 import { trpc } from "~/trpc/react";
@@ -92,18 +91,12 @@ function RegisterForm() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [confirm, setConfirm] = useState("");
-  const [showPass, setShowPass] = useState(false);
   const [city, setCity] = useState("Lucknow");
   const [stateName, setStateName] = useState("Uttar Pradesh");
   const [businessName, setBusinessName] = useState("");
   const [experience, setExperience] = useState("2");
   const [cats, setCats] = useState<string[]>([]);
   const [officeAddress, setOfficeAddress] = useState("");
-  const [agentNews, setAgentNews] = useState(true);
-  const [vendorNews, setVendorNews] = useState(true);
-  const [customerNews, setCustomerNews] = useState(true);
   const [terms, setTerms] = useState(false);
   const [err, setErr] = useState("");
   const [done, setDone] = useState<Role | null>(null);
@@ -147,9 +140,7 @@ function RegisterForm() {
     if (fullName.trim().length < 2) return setErr("Please enter your full name.");
     if (!/^[6-9]\d{9}$/.test(mobile.trim())) return setErr("Enter a valid 10-digit mobile number starting with 6–9.");
     const em = email.trim();
-    if (em !== "" && !/\S+@\S+\.\S+/.test(em)) return setErr("Enter a valid email address (or leave it blank).");
-    if (password.length < 6) return setErr("Password must be at least 6 characters.");
-    if (password !== confirm) return setErr("Passwords do not match.");
+    if (!/\S+@\S+\.\S+/.test(em)) return setErr("Enter the email you'll use to sign in with Google.");
     if (city.trim().length < 2) return setErr("Please choose your city.");
     if (role === "VENDOR") {
       if (businessName.trim().length < 2) return setErr("Please enter your business / shop name.");
@@ -163,7 +154,6 @@ function RegisterForm() {
         fullName: fullName.trim(),
         mobile: mobile.trim(),
         email: em === "" ? undefined : em,
-        password,
         role,
         city: city.trim(),
         state: stateName.trim() === "" ? "—" : stateName.trim(),
@@ -175,26 +165,16 @@ function RegisterForm() {
       // Mailing-list subscribes fire HERE — immediately after account creation,
       // never after login: new accounts are unverified so the auto-signIn below
       // is expected to fail, and must not gate the subscription.
-      if (role === "AGENT" && em !== "" && agentNews) {
-        subscribeMailingList(em, fullName.trim(), "agent_registration").catch(() => undefined);
+      // Everyone gets subscribed by default (the checkbox was removed) so Patra
+      // can trigger the opt-in email; they can unsubscribe from the email itself.
+      const sourceMap = { AGENT: "agent_registration", VENDOR: "vendor_registration", CUSTOMER: "customer_registration" } as const;
+      if (em !== "") {
+        subscribeMailingList(em, fullName.trim(), sourceMap[role]).catch(() => undefined);
       }
-      if (role === "VENDOR" && em !== "" && vendorNews) {
-        subscribeMailingList(em, fullName.trim(), "vendor_registration").catch(() => undefined);
-      }
-      if (role === "CUSTOMER" && em !== "" && customerNews) {
-        subscribeMailingList(em, fullName.trim(), "customer_registration").catch(() => undefined);
-      }
-      const r = await signIn("credentials", { redirect: false, mobile: mobile.trim(), password });
-      // NOTE: subscribes fire BEFORE the auto-login below on purpose — new
-      // accounts are unverified, so signIn is expected to fail and must never
-      // gate the mailing-list subscription.
-      if (r?.error) {
-        router.push("/auth/login");
-        return;
-      }
+      // Accounts are passwordless now — sign-in happens with Google (same
+      // email) or the mobile OTP flow. Send the customer to the login page.
       if (role === "CUSTOMER") {
-        router.push("/customer/dashboard");
-        router.refresh();
+        router.push("/auth/login?registered=1");
         return;
       }
       setDone(role);
@@ -317,6 +297,12 @@ function RegisterForm() {
             {role === "VENDOR" ? "Free listing • approval in 24–48 hrs • weekly payouts." : role === "AGENT" ? "5% commission • your city, your network." : "₹100 wallet bonus • book in 60 seconds."}
           </p>
 
+          {sp.get("google") === "1" ? (
+            <div className="mt-5 rounded-xl border border-accent-200 bg-accent-50 p-3 text-[12px] font-semibold text-accent-600">
+              No ADDies account exists for <b>{sp.get("email") ?? "that Google email"}</b> yet. Create your account below with your mobile number — after that you can sign in with Google.
+            </div>
+          ) : null}
+
           {/* role switch */}
           <div className="mt-5 grid grid-cols-3 gap-2 rounded-2xl border border-line bg-white p-1.5">
             {ROLES.map(({ key, label, Icon }) => (
@@ -342,25 +328,12 @@ function RegisterForm() {
                 <input id="reg-mobile" required inputMode="numeric" placeholder="10-digit mobile" value={mobile} onChange={(e) => setMobile(e.target.value.replace(/\D/g, "").slice(0, 10))} className="input !py-3 font-medium tracking-wide" autoComplete="tel" />
               </div>
               <div>
-                <label htmlFor="reg-email" className="mb-1.5 block text-[13px] font-extrabold text-ink">Email <span className="font-semibold text-muted">(optional)</span></label>
-                <input id="reg-email" type="email" placeholder="you@email.com" value={email} onChange={(e) => setEmail(e.target.value)} className="input !py-3" autoComplete="email" />
+                <label htmlFor="reg-email" className="mb-1.5 block text-[13px] font-extrabold text-ink">Email</label>
+                <input id="reg-email" type="email" required placeholder="you@email.com" value={email} onChange={(e) => setEmail(e.target.value)} className="input !py-3" autoComplete="email" />
+                <p className="mt-1 text-[11px] font-medium text-muted">Used to sign in with Google.</p>
               </div>
             </div>
-            <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
-              <div>
-                <label htmlFor="reg-pass" className="mb-1.5 block text-[13px] font-extrabold text-ink">Password</label>
-                <div className="relative">
-                  <input id="reg-pass" required type={showPass ? "text" : "password"} placeholder="Min 6 characters" value={password} onChange={(e) => setPassword(e.target.value)} className="input !py-3 pr-11" autoComplete="new-password" />
-                  <button type="button" onClick={() => setShowPass((s) => !s)} aria-label={showPass ? "Hide password" : "Show password"} className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full p-1.5 text-muted transition-colors hover:bg-surface hover:text-ink">
-                    {showPass ? <EyeOff size={17} /> : <Eye size={17} />}
-                  </button>
-                </div>
-              </div>
-              <div>
-                <label htmlFor="reg-confirm" className="mb-1.5 block text-[13px] font-extrabold text-ink">Confirm</label>
-                <input id="reg-confirm" required type={showPass ? "text" : "password"} placeholder="Repeat password" value={confirm} onChange={(e) => setConfirm(e.target.value)} className="input !py-3" autoComplete="new-password" />
-              </div>
-            </div>
+            <p className="-mt-1 text-[11px] font-medium text-muted">No password needed — you&apos;ll sign in with Google using your email.</p>
 
             {/* city via shared location picker */}
             <div>
@@ -403,10 +376,6 @@ function RegisterForm() {
                 ) : (
                 <p className="rounded-xl bg-surface px-3.5 py-2.5 text-[13px] font-medium text-muted">Service catalog is being set up — register now, and our team will assign your services during KYC verification.</p>
                 )}
-                <label className="mt-2.5 flex cursor-pointer items-start gap-2.5 rounded-xl bg-surface px-3.5 py-2.5 text-[13px] font-medium text-body">
-                  <input type="checkbox" checked={vendorNews} onChange={(e) => setVendorNews(e.target.checked)} className="mt-0.5 h-4 w-4 shrink-0 rounded accent-primary-600" />
-                  <span>Email me lead alerts, vendor offers & policy updates <span className="text-muted">(service.apnidesidukaan-vendors)</span></span>
-                </label>
               </div>
             )}
 
@@ -417,10 +386,6 @@ function RegisterForm() {
                 <label htmlFor="reg-office" className="mb-1.5 block text-[13px] font-extrabold text-ink">Office address <span className="font-semibold text-muted">(optional)</span></label>
                 <input id="reg-office" placeholder={`e.g. MG Road, ${city}`} value={officeAddress} onChange={(e) => setOfficeAddress(e.target.value)} className="input !py-3" />
                 <p className="mt-2 flex items-start gap-1.5 text-xs font-medium text-muted"><Banknote size={13} className="mt-0.5 shrink-0 text-success" /> Territory auto-assigned: <b className="text-ink">{city}</b> at 5% commission.</p>
-                <label className="mt-2.5 flex cursor-pointer items-start gap-2.5 rounded-xl bg-surface px-3.5 py-2.5 text-[13px] font-medium text-body">
-                  <input type="checkbox" checked={agentNews} onChange={(e) => setAgentNews(e.target.checked)} className="mt-0.5 h-4 w-4 shrink-0 rounded accent-primary-600" />
-                  <span>Email me agent updates, city launches & payout news <span className="text-muted">(service.apnidesidukaan-agents)</span></span>
-                </label>
               </div>
             )}
 
@@ -429,10 +394,6 @@ function RegisterForm() {
               <p className="flex items-start gap-1.5 rounded-xl bg-success-soft px-3.5 py-2.5 text-[13px] font-semibold text-success">
                 <Wallet size={15} className="mt-0.5 shrink-0" /> ₹100 welcome bonus lands in your wallet the moment you join.
               </p>
-              <label className="flex cursor-pointer items-start gap-2.5 rounded-xl bg-surface px-3.5 py-2.5 text-[13px] font-medium text-body">
-                <input type="checkbox" checked={customerNews} onChange={(e) => setCustomerNews(e.target.checked)} className="mt-0.5 h-4 w-4 shrink-0 rounded accent-primary-600" />
-                <span>Email me new services, offers & booking updates <span className="text-muted">(service.apnidesidukaan-customers)</span></span>
-              </label>
               </>
             )}
 

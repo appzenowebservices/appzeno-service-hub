@@ -10,6 +10,8 @@ export const env = createEnv({
   
     server: {
     AUTH_SECRET: isProd ? z.string() : z.string().optional(),
+    AUTH_GOOGLE_ID: z.string().optional(),
+    AUTH_GOOGLE_SECRET: z.string().optional(),
     SUPERADMIN_MOBILE: z.string().optional(),
     SUPERADMIN_PASSWORD_HASH_B64: z.string().optional(),
     OMNIPOST_LIST_SECRETS: z.string().optional(),
@@ -56,6 +58,8 @@ export const env = createEnv({
    */
   runtimeEnv: {
     AUTH_SECRET: process.env.AUTH_SECRET,
+    AUTH_GOOGLE_ID: process.env.AUTH_GOOGLE_ID,
+    AUTH_GOOGLE_SECRET: process.env.AUTH_GOOGLE_SECRET,
     SUPERADMIN_MOBILE: process.env.SUPERADMIN_MOBILE,
     SUPERADMIN_PASSWORD_HASH_B64: process.env.SUPERADMIN_PASSWORD_HASH_B64,
     OMNIPOST_LIST_SECRETS: process.env.OMNIPOST_LIST_SECRETS,

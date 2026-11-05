@@ -21,6 +21,7 @@ export default function LoginPage() {
   const [remember, setRemember] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [info, setInfo] = useState("");
   const [welcome, setWelcome] = useState<{ name: string; dest: string } | null>(null);
   const utils = trpc.useUtils();
   const loginCheck = trpc.auth.login.useMutation();
@@ -50,6 +51,12 @@ export default function LoginPage() {
     if (saved) {
       setMobile(saved);
       setRemember(true);
+    }
+    const q = new URLSearchParams(window.location.search);
+    if (q.get("registered") === "1") {
+      setInfo("Account created! Sign in with Google using your email.");
+    } else if (q.get("reset") === "1") {
+      setInfo("Password updated — sign in with your new password.");
     }
   }, []);
 
@@ -223,6 +230,10 @@ export default function LoginPage() {
           setError("Incorrect password. Please try again.");
           return;
         }
+        if (check.reason === "NO_PASSWORD") {
+          setError("This account has no password — sign in with Google using your account email.");
+          return;
+        }
         // NO_ACCOUNT: verify the number first (OTP), then continue to sign-up.
         if (/^\d{10}$/.test(mobile.trim())) {
           openOtp("signup");
@@ -331,6 +342,13 @@ export default function LoginPage() {
           <h2 className="text-2xl font-extrabold tracking-tight text-ink sm:text-[28px]">Welcome back 👋</h2>
           <p className="sub mt-1.5">Sign in to track bookings, pay & rate your pro.</p>
 
+          {info !== "" ? (
+            <div className="mt-4 flex items-start gap-2 rounded-xl border border-success/20 bg-success-soft p-3 text-[13px] font-semibold text-success">
+              <CheckCircle2 size={15} className="mt-0.5 shrink-0" />
+              {info}
+            </div>
+          ) : null}
+
           {otpOpen ? (
             <div className="mt-7">
               <div className="card !p-5">
@@ -431,7 +449,7 @@ export default function LoginPage() {
             <div>
               <div className="mb-1.5 flex items-center justify-between">
                 <label htmlFor="login-pass" className="block text-[13px] font-extrabold text-ink">Password</label>
-                <span className="cursor-not-allowed text-xs font-bold text-muted" title="Password reset over OTP — coming soon">Forgot password?</span>
+                <Link href="/auth/forgot-password" className="text-xs font-bold text-primary-600 hover:underline">Forgot password?</Link>
               </div>
               <div className="relative">
                 <input
@@ -476,6 +494,28 @@ export default function LoginPage() {
             </button>
           </form>
           )}
+
+          {!otpOpen ? (
+            <>
+              <div className="mt-4 flex items-center gap-3 text-xs font-bold text-muted">
+                <span className="h-px flex-1 bg-line" /> OR <span className="h-px flex-1 bg-line" />
+              </div>
+              <button
+                type="button"
+                onClick={() => { setError(""); void signIn("google", { callbackUrl: "/auth/google" }); }}
+                className="btn-ghost mt-3 flex w-full items-center justify-center gap-2.5 !py-3"
+              >
+                <svg width="17" height="17" viewBox="0 0 48 48" aria-hidden>
+                  <path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.6l6.7-6.7C35.6 2.4 30.2 0 24 0 14.6 0 6.5 5.4 2.5 13.3l7.8 6.1C12.2 13.6 17.6 9.5 24 9.5z" />
+                  <path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.7c-.6 3-2.3 5.5-4.8 7.2l7.5 5.8c4.4-4.1 7.1-10 7.1-17.5z" />
+                  <path fill="#FBBC05" d="M10.3 28.6c-.5-1.5-.8-3-.8-4.6s.3-3.1.8-4.6l-7.8-6.1C.9 16.5 0 20.1 0 24s.9 7.5 2.5 10.7l7.8-6.1z" />
+                  <path fill="#34A853" d="M24 48c6.2 0 11.4-2 15.2-5.5l-7.5-5.8c-2.1 1.4-4.7 2.2-7.7 2.2-6.4 0-11.8-4.1-13.7-9.9l-7.8 6.1C6.5 42.6 14.6 48 24 48z" />
+                </svg>
+                Continue with Google
+              </button>
+              <p className="mt-2 text-center text-[11px] font-medium text-muted">Use the Google email linked to your ADDies account.</p>
+            </>
+          ) : null}
 
           <div className="mt-6 flex items-center gap-3 text-xs font-bold text-muted">
             <span className="h-px flex-1 bg-line" /> NEW TO ADDIES? <span className="h-px flex-1 bg-line" />

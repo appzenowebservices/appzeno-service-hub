@@ -17,7 +17,11 @@ export const authRouter = createTRPCRouter({
       // "no account", "wrong password", "blocked", "unverified email" and the
       // env superadmin (no DB password) apart to drive the right UX.
       if (!user) return { ok: false as const, reason: "NO_ACCOUNT" as const };
-      if (!user.passwordHash) return { ok: false as const, reason: "ENV_ADMIN" as const };
+      if (!user.passwordHash) {
+        const envMobile = (process.env.SUPERADMIN_MOBILE ?? "").trim();
+        // The env-root superadmin's DB row has no password on purpose.
+        return { ok: false as const, reason: envMobile !== "" && user.mobile === envMobile ? ("ENV_ADMIN" as const) : ("NO_PASSWORD" as const) };
+      }
       if (!user.isActive) {
         return { ok: false as const, reason: "BLOCKED" as const, message: "Account blocked. Contact support." };
       }
@@ -89,13 +93,57 @@ export const authRouter = createTRPCRouter({
       return { ok: true };
     }),
 
+  /** Step 1 of forgot-password: does an active account exist for this mobile? */
+  startPasswordReset: publicProcedure
+    .input(z.object({ mobile: z.string().regex(/^\d{10}$/, "Enter a valid 10-digit mobile") }))
+    .mutation(async ({ ctx, input }) => {
+      const user = await ctx.db.user.findFirst({ where: { mobile: input.mobile.trim() }, select: { id: true, isActive: true, passwordHash: true } });
+      const envMobile = (process.env.SUPERADMIN_MOBILE ?? "").trim();
+      if (envMobile !== "" && input.mobile.trim() === envMobile) return { ok: false as const, reason: "PROTECTED" as const };
+      if (!user) return { ok: false as const, reason: "NO_ACCOUNT" as const };
+      if (!user.isActive) return { ok: false as const, reason: "BLOCKED" as const };
+      return { ok: true as const, hasPassword: Boolean(user.passwordHash) };
+    }),
+
+  /** Step 2: verify the OTP and set a new password. */
+  resetPasswordWithOtp: publicProcedure
+    .input(z.object({ mobile: z.string(), idToken: z.string().min(20), newPassword: z.string().min(6) }))
+    .mutation(async ({ ctx, input }) => {
+      const user = await ctx.db.user.findFirst({ where: { mobile: input.mobile.trim() } });
+      if (!user) throw new TRPCError({ code: "NOT_FOUND", message: "No account found with this mobile number." });
+      if (!user.isActive) throw new TRPCError({ code: "FORBIDDEN", message: "Account blocked. Contact support." });
+
+      const adminAuth = getFirebaseAdminAuth();
+      if (!adminAuth) {
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Password reset is not configured on the server. Please try again later." });
+      }
+      let decoded;
+      try {
+        decoded = await adminAuth.verifyIdToken(input.idToken);
+      } catch {
+        throw new TRPCError({ code: "UNAUTHORIZED", message: "Invalid or expired verification code. Please request a new OTP." });
+      }
+      const norm = (v: string) => v.replace(/\D/g, "").slice(-10);
+      if (norm(decoded.phone_number ?? "") !== norm(user.mobile)) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "You verified a different number than this account." });
+      }
+
+      const salt = await genSalt(10);
+      const passwordHash = await hash(input.newPassword, salt);
+      await ctx.db.user.update({ where: { id: user.id }, data: { passwordHash } });
+      console.log(`[auth] password reset for ${user.id}`);
+      return { ok: true };
+    }),
+
   register: publicProcedure
     .input(
       z.object({
         fullName: z.string().min(2),
         mobile: z.string().regex(/^[6-9]\d{9}$/, "Enter valid 10-digit mobile"),
         email: z.string().email().optional(),
-        password: z.string().min(6),
+        // Passwordless registration (sign in with Google); kept optional for
+        // backwards compatibility with older clients.
+        password: z.string().min(6).optional(),
         role: z.enum(["CUSTOMER", "VENDOR", "AGENT"]).default("CUSTOMER"),
         city: z.string().min(2),
         state: z.string().min(2),
@@ -126,7 +174,7 @@ export const authRouter = createTRPCRouter({
         });
       }
       const salt = await genSalt(10);
-      const passwordHash = await hash(input.password, salt);
+      const passwordHash = input.password ? await hash(input.password, salt) : undefined;
 
       const user = await ctx.db.user.create({
         data: {
