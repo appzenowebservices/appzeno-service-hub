@@ -15,6 +15,8 @@ COPY . .
 # Prisma client + Next.js production build (DB URL can be dummy at build time)
 ENV SKIP_ENV_VALIDATION=1
 ENV NEXT_TELEMETRY_DISABLED=1
+# Keep the build within the 4 GB VPS limits (previous builds thrashed the box).
+ENV NODE_OPTIONS=--max-old-space-size=2048
 RUN npx prisma generate
 RUN npm run build
 
